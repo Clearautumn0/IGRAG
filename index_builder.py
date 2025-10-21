@@ -95,8 +95,19 @@ class FAISSIndexBuilder:
         """
         logger.info("开始构建全局特征索引...")
         
-        # 创建索引
+        # 创建索引（当样本数不足以训练IVF时回退为Flat）
+        num_points = len(global_features)
+        effective_index_type = self.index_type
+        if self.index_type == "IVF" and num_points < INDEX_CONFIG["nlist"]:
+            logger.warning(
+                f"训练样本数 {num_points} 小于 nlist={INDEX_CONFIG['nlist']}，全局索引回退为 Flat"
+            )
+            effective_index_type = "Flat"
+        # 临时按有效类型创建索引
+        original_index_type = self.index_type
+        self.index_type = effective_index_type
         self.global_index = self._create_index(self.feature_dim)
+        self.index_type = original_index_type
         
         # 准备数据
         features_array = np.vstack(global_features).astype(np.float32)
@@ -105,7 +116,7 @@ class FAISSIndexBuilder:
         faiss.normalize_L2(features_array)
         
         # 训练索引（IVF需要）
-        if self.index_type == "IVF":
+        if effective_index_type == "IVF":
             logger.info("训练IVF索引...")
             self.global_index.train(features_array)
         
@@ -114,7 +125,7 @@ class FAISSIndexBuilder:
         self.global_index.add(features_array)
         
         # 设置搜索参数
-        if self.index_type == "IVF":
+        if effective_index_type == "IVF":
             self.global_index.nprobe = INDEX_CONFIG["nprobe"]
         
         # 存储元数据
@@ -141,8 +152,19 @@ class FAISSIndexBuilder:
         """
         logger.info("开始构建局部特征索引...")
         
-        # 创建索引
+        # 创建索引（当样本数不足以训练IVF时回退为Flat）
+        # 估算patch样本总数
+        num_points = int(np.sum([pf.shape[0] for pf in patch_features_list]) if patch_features_list else 0)
+        effective_index_type = self.index_type
+        if self.index_type == "IVF" and num_points < INDEX_CONFIG["nlist"]:
+            logger.warning(
+                f"训练样本数 {num_points} 小于 nlist={INDEX_CONFIG['nlist']}，局部索引回退为 Flat"
+            )
+            effective_index_type = "Flat"
+        original_index_type = self.index_type
+        self.index_type = effective_index_type
         self.local_index = self._create_index(self.feature_dim)
+        self.index_type = original_index_type
         
         # 准备数据
         all_patch_features = []
@@ -168,11 +190,12 @@ class FAISSIndexBuilder:
                     'captions': caption_list
                 })
         
-        # 转换为numpy数组
+        # 转换为numpy数组并确保连续内存
         features_array = np.vstack(all_patch_features).astype(np.float32)
+        features_array = np.ascontiguousarray(features_array)
         
         # 训练索引（IVF需要）
-        if self.index_type == "IVF":
+        if effective_index_type == "IVF":
             logger.info("训练IVF索引...")
             self.local_index.train(features_array)
         
@@ -181,7 +204,7 @@ class FAISSIndexBuilder:
         self.local_index.add(features_array)
         
         # 设置搜索参数
-        if self.index_type == "IVF":
+        if effective_index_type == "IVF":
             self.local_index.nprobe = INDEX_CONFIG["nprobe"]
         
         logger.info(f"局部索引构建完成，包含 {len(features_array)} 个patch特征")
@@ -431,8 +454,11 @@ def build_indexes_from_coco(coco_root: str,
     # 构建全局索引
     index_builder.build_global_index(global_features, image_ids, captions_list)
     
-    # 构建局部索引
-    index_builder.build_local_index(patch_features_list, image_ids, captions_list)
+    # 构建局部索引（容错：失败则跳过局部索引）
+    try:
+        index_builder.build_local_index(patch_features_list, image_ids, captions_list)
+    except Exception as e:
+        logger.warning(f"局部索引构建失败，跳过局部索引: {e}")
     
     # 保存索引
     output_path = Path(output_dir)

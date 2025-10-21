@@ -117,19 +117,23 @@ class CLIPFeatureExtractor:
         """
         with torch.no_grad():
             # 获取patch embeddings
-            x = self.model.visual.conv1(image_tensor)  # [1, embed_dim, H', W']
-            x = x.reshape(x.shape[0], x.shape[1], -1)  # [1, embed_dim, H'*W']
-            x = x.permute(0, 2, 1)  # [1, H'*W', embed_dim]
-            
-            # 添加位置编码
-            x = x + self.model.visual.positional_embedding[:, 1:, :]  # 跳过CLS token
-            
+            x = self.model.visual.conv1(image_tensor)  # [B, embed_dim, H', W']
+            x = x.reshape(x.shape[0], x.shape[1], -1)  # [B, embed_dim, H'*W']
+            x = x.permute(0, 2, 1)  # [B, H'*W', embed_dim]
+
+            # 添加位置编码（兼容2D或3D形状）
+            pos = self.model.visual.positional_embedding
+            if pos.dim() == 2:
+                pos = pos.unsqueeze(0)  # [1, n_ctx, width]
+            # 跳过CLS token，仅为patch tokens添加位置编码
+            x = x + pos[:, 1:, :]
+
             # 通过transformer层
             x = self.model.visual.transformer(x)
-            
-            # 获取patch特征（跳过CLS token）
-            patch_features = x[0]  # [num_patches, feature_dim]
-            
+
+            # 获取patch特征（形状 [num_patches, feature_dim]）
+            patch_features = x[0]
+
             return patch_features
     
     def _get_patch_positions(self) -> List[Tuple[int, int]]:

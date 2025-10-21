@@ -37,7 +37,7 @@ def check_dependencies():
     required_packages = [
         "torch",
         "transformers", 
-        "open_clip_torch",
+        "open_clip",  # open_clip_torch 的安装包提供的模块名为 open_clip
         "faiss-cpu",
         "PIL",
         "numpy",

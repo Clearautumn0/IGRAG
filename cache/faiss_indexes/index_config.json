@@ -1,0 +1,7 @@
+{
+  "feature_dim": 512,
+  "index_type": "IVF",
+  "use_gpu": false,
+  "global_count": 50,
+  "local_count": 0
+}

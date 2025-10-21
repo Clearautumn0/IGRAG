@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).parent
 
 # 数据路径配置
 DATA_CONFIG = {
-    "coco_root": "/path/to/coco2017",  # 需要用户设置COCO数据集路径
+    "coco_root": "/home/m025/qqw/COCO",  # COCO数据集路径
     "train_images": "train2017",
     "val_images": "val2017", 
     "annotations": "annotations",
