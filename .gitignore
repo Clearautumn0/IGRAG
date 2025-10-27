@@ -1,1 +1,8 @@
 /output/
+*.pyc
+*.jpg
+core/__pycache__/__init__.cpython-310.pyc
+core/__pycache__/generator.cpython-310.pyc
+core/__pycache__/retriever.cpython-310.pyc
+utils/__pycache__/__init__.cpython-310.pyc
+utils/__pycache__/image_utils.cpython-310.pyc
