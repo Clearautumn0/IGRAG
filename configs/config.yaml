@@ -1,0 +1,27 @@
+model_config:
+  clip_model_path: "../models/clip-vit-base-patch32/"
+  llm_model_path: "../models/flan-t5-base/"
+
+data_config:
+  coco_images_dir: "/home/m025/qqw/coco/train2017/"
+  coco_annotations_path: "/home/m025/qqw/coco/annotations/captions_train2017.json"
+
+retrieval_config:
+  top_k: 3
+  use_patch_retrieval: false  # 为后续分块功能预留
+
+generation_config:
+  max_length: 100
+  num_beams: 3
+
+runtime_config:
+  # 'deploy' -> on generation failure, use fallback composed from retrieved captions
+  # 'test'   -> on generation failure, print a failure message
+  mode: "test"
+
+knowledge_base_config:
+  knowledge_base_path: "./output/coco_knowledge_base.faiss"
+  image_id_to_captions_path: "./output/image_id_to_captions.pkl"
+
+log_config:
+  log_level: "ERROR"

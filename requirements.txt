@@ -1,0 +1,16 @@
+# Core libraries
+torch
+transformers
+numpy
+Pillow
+pyyaml
+tqdm
+
+# FAISS (CPU). If you have CUDA and want GPU support, install `faiss-gpu` instead.
+faiss-cpu
+
+# Optional but commonly required for some tokenizers
+sentencepiece
+
+# Optional helpers
+accelerate
