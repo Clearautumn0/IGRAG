@@ -270,14 +270,14 @@ class CaptionGenerator:
         decoded = self.tokenizer.decode(out[0], skip_special_tokens=True)
         cleaned = self._clean_output(decoded)
 
-        if debug:
-            try:
-                print("\n--- raw generated token ids ---")
-                print(out[0].tolist()[:200])
-                print("--- raw decoded (skip_special_tokens=False) ---")
-                print(self.tokenizer.decode(out[0], skip_special_tokens=False))
-            except Exception as e:
-                print(f"Failed to print generated ids: {e}")
+        # if debug:
+        #     try:
+        #         print("\n--- raw generated token ids ---")
+        #         print(out[0].tolist()[:200])
+        #         print("--- raw decoded (skip_special_tokens=False) ---")
+        #         print(self.tokenizer.decode(out[0], skip_special_tokens=False))
+        #     except Exception as e:
+        #         print(f"Failed to print generated ids: {e}")
 
         # if output is clearly invalid or too short, retry with stronger beams and English prompt
         if not self._is_valid_caption(cleaned) or len(cleaned) <= 4:

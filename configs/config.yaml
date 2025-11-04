@@ -41,4 +41,4 @@ patch_config:
   final_instruction: "Please synthesize all the above descriptions, paying special attention to the consistency of local details, and generate a new, accurate and comprehensive image description."
   
   # 调试选项
-  save_debug_patches: false  # 是否保存检测到的区域图像用于调试
+  save_debug_patches: true  # 是否保存检测到的区域图像用于调试
