@@ -228,8 +228,14 @@ class ImageRetriever:
                 # 裁剪区域
                 image_patches = self.patch_detector.crop_regions(img, filtered_detections)
                 
-                # 对每个局部区域进行检索
-                local_results = self.local_retriever.retrieve_local_descriptions(image_patches)
+                # 提取全局检索到的image_id集合，用于排除重复
+                global_image_ids = {item.get('image_id') for item in global_descriptions if item.get('image_id') is not None}
+                
+                # 对每个局部区域进行检索，排除全局检索到的image_id
+                local_results = self.local_retriever.retrieve_local_descriptions(
+                    image_patches, 
+                    exclude_image_ids=global_image_ids
+                )
                 local_regions = self.local_retriever.merge_local_descriptions(local_results)
                 
                 logger.info(f"Retrieved {len(local_regions)} local regions with descriptions")

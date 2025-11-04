@@ -181,9 +181,8 @@ class CaptionGenerator:
             descriptions = region.get("descriptions", [])
             
             if descriptions:
-                # 限制每个区域的描述数量
-                region_descs = descriptions[:3]  # 每个区域最多3个描述
-                desc_text = "; ".join([d.strip() for d in region_descs if d and isinstance(d, str)])
+                # 每个局部区域只有一条描述
+                desc_text = descriptions[0].strip() if isinstance(descriptions[0], str) else str(descriptions[0]).strip()
                 if desc_text:
                     local_descriptions_list.append(f"- Region {idx+1} ({class_label}): {desc_text}")
         
