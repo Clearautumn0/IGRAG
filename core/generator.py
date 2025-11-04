@@ -184,21 +184,21 @@ class CaptionGenerator:
         
         global_block = "\n".join([f"- {desc}" for desc in global_descriptions]) if global_descriptions else "None"
         
-        # 处理局部描述
+        # 处理局部描述：按类别分组，结构化呈现以方便模型推断实例个数与复数
         local_regions = retrieved_data.get("local_regions", [])
-        local_descriptions_list = []
-        
-        for idx, region in enumerate(local_regions):
-            class_label = region.get("class_label", f"object_{idx+1}")
-            descriptions = region.get("descriptions", [])
-            
-            if descriptions:
-                # 每个局部区域只有一条描述
-                desc_text = descriptions[0].strip() if isinstance(descriptions[0], str) else str(descriptions[0]).strip()
-                if desc_text:
-                    local_descriptions_list.append(f"- Region {idx+1} ({class_label}): {desc_text}")
-        
-        local_block = "\n".join(local_descriptions_list) if local_descriptions_list else "None"
+        grouped = self.group_local_descriptions_by_class(local_regions)
+
+        local_sections = []
+        for class_label, descs in grouped.items():
+            if not descs:
+                continue
+            # 生成结构化分组块
+            section_lines = [f"OBJECT TYPE: {class_label}"]
+            for i, d in enumerate(descs, start=1):
+                section_lines.append(f"- Instance {i}: {d}")
+            local_sections.append("\n".join(section_lines))
+
+        local_block = "\n\n".join(local_sections) if local_sections else "None"
         
         # 构建完整提示词
         prompt = self.PROMPT_TEMPLATE_PATCH.format(
@@ -217,6 +217,87 @@ class CaptionGenerator:
             prompt = prompt[:max_prompt_length] + "..."
         
         return prompt
+
+    def group_local_descriptions_by_class(self, local_regions: List[dict]) -> dict:
+        """按检测类别分组局部描述，并去重、规范化。
+
+        返回形如：
+        {
+            "bird": ["desc1", "desc2", ...],
+            "person": ["descA", ...]
+        }
+        """
+        grouped: dict = {}
+
+        def _normalize(text: str) -> str:
+            # 基本规范化：小写、去多余空白与尾部标点
+            s = (text or "").strip()
+            s = re.sub(r"\s+", " ", s).strip().lower()
+            s = s.rstrip(".!")
+            return s
+
+        def _token_set(s: str) -> set:
+            # 简单分词并移除非字母数字字符
+            s = re.sub(r"[^a-z0-9\s]", " ", s)
+            toks = [t for t in s.split() if t]
+            return set(toks)
+
+        def _similar(a: str, b: str, threshold: float = 0.78) -> bool:
+            # 基于 Jaccard 相似度的简单模糊合并
+            A, B = _token_set(_normalize(a)), _token_set(_normalize(b))
+            if not A or not B:
+                return False
+            inter = len(A & B)
+            union = len(A | B)
+            jacc = inter / union if union else 0.0
+            # 若短句高度包含于长句也视为相似（overlap coefficient）
+            overlap = inter / min(len(A), len(B)) if min(len(A), len(B)) else 0.0
+            return jacc >= threshold or overlap >= 0.85
+
+        # 维护插入顺序：按出现顺序组织类别
+        class_order = []
+        # 每个类别维护代表描述列表，用于模糊合并
+        class_reps: dict = {}
+        for idx, region in enumerate(local_regions):
+            class_label = region.get("class_label") or f"object_{idx+1}"
+            # 统一类别大小写
+            class_key = str(class_label).strip()
+            if class_key not in grouped:
+                grouped[class_key] = []
+                class_order.append(class_key)
+                class_reps[class_key] = []
+
+            descs = region.get("descriptions", [])
+            # 当前我们保证每个区域只有一条描述，但为兼容性保留遍历
+            for d in descs if isinstance(descs, list) else [descs]:
+                if not isinstance(d, str):
+                    d = str(d)
+                norm = _normalize(d)
+                if not norm:
+                    continue
+                # 与已有代表进行相似度比较，极相似则合并：
+                reps = class_reps[class_key]
+                is_similar = False
+                for i, rep in enumerate(reps):
+                    if _similar(d, rep):
+                        # 选择信息量更大的那条（更长的句子）作为代表
+                        better = d if len(d) > len(rep) else rep
+                        reps[i] = better
+                        # 同步更新 grouped 中对应代表（最后一个元素即最新代表）
+                        # 简化处理：若存在旧代表，替换第一次出现的旧代表
+                        for j, existed in enumerate(grouped[class_key]):
+                            if _similar(existed, rep):
+                                grouped[class_key][j] = better.strip()
+                                break
+                        is_similar = True
+                        break
+                if not is_similar:
+                    reps.append(d)
+                    grouped[class_key].append(d.strip())
+
+        # 保持类别顺序
+        ordered_grouped = {k: grouped[k] for k in class_order}
+        return ordered_grouped
 
     def _clean_output(self, text: str) -> str:
         """Basic cleaning: remove repeated whitespace, strip special tokens, ensure ending punctuation."""
