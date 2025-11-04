@@ -36,38 +36,53 @@ conda run -n IGRAG pip install -r requirements.txt
 
 注意：如果你希望使用 GPU 版本的 FAISS，请在 `requirements.txt` 中将 `faiss-cpu` 替换为 `faiss-gpu`，并确保 CUDA 驱动与 CUDA 版本匹配。
 
+
 3) 构建知识库（必须）
 
-从 COCO 标注中提取每张图像的描述，并对所有图像进行 CLIP 特征提取，最终生成 FAISS 索引与映射文件：
+从 COCO 标注中提取每张图像的描述，并对所有图像进行 CLIP 特征提取，最终生成 FAISS 索引与映射文件。使用 `IGRAG` Conda 环境运行脚本：
 
 ```bash
-python3 scripts/build_knowledge_base.py
+conda run -n IGRAG python3 scripts/build_knowledge_base.py
 ```
 
 生成文件（默认，来源于 `configs/config.yaml`）：
 
-- `./output/coco_knowledge_base.faiss` — FAISS 向量索引
+- `./output/coco_knowledge_base.faiss` — 图像向量 FAISS 索引
 - `./output/image_id_to_captions.pkl` — image_id -> 描述列表（pickle）
+
+新增（文本向量库，用于分块检索）：
+
+- `./output/text_knowledge_base.faiss` — 基于 CLIP 文本编码器的文本向量索引
+- `./output/text_descriptions.pkl` — 文本索引的描述列表（index -> caption）
 
 构建过程可能耗时较长（取决于 COCO 子集大小、模型加载与硬件）。脚本会显示特征提取的进度条。
 
+
 4) 运行端到端测试（生成描述）
 
-默认 `main.py` 会使用 `input/test_image.jpg` 作为测试图像并输出结果：
+默认 `main.py` 会使用 `input/test_image.jpg` 作为测试图像并输出结果。使用 `IGRAG` Conda 环境运行：
 
 ```bash
-python3 main.py
+conda run -n IGRAG python3 main.py
 ```
 
-如果你的测试图片名为 `input/test.jpg`，请把它重命名或复制到 `input/test_image.jpg`：
+如果你的测试图片名为 `input/test.jpg`，可以传入 `--i` 参数或复制/重命名为 `input/test_image.jpg`：
 
 ```bash
-mv input/test.jpg input/test_image.jpg
-# 或
+conda run -n IGRAG python3 main.py --i input/test.jpg
+# 或 (复制到默认路径)
 cp input/test.jpg input/test_image.jpg
 ```
 
-（当前 `main.py` 尚未实现命令行 `--input` 参数；如果你需要我可以立即添加）
+命令行选项示例：
+
+- 指定运行模式（`deploy` 或 `test`）：
+
+```bash
+conda run -n IGRAG python3 main.py --mode deploy --i input/test.jpg
+```
+
+提示：是否启用分块检索由 `configs/config.yaml` 中的 `patch_config.enabled` 与 `retrieval_config.use_patch_retrieval` 控制。运行主程序时会先做全局检索（image FAISS），若启用分块检索则会对输入图像切块并利用 `text_knowledge_base.faiss` 进行每块的文本检索，再把全局与局部描述合成为 LLM 的提示词。
 
 预期控制台输出（最小化，只输出必要信息）
 
@@ -122,7 +137,8 @@ from utils.image_utils import load_image
 cfg='configs/config.yaml'
 r=ImageRetriever(cfg)
 img=load_image('input/test_image.jpg')
-print(r.get_retrieved_captions(img, top_k=3))
+# By default, `get_retrieved_captions` uses `retrieval_config.top_k_global` from the config
+print(r.get_retrieved_captions(img))
 PY
 ```
 
@@ -150,7 +166,7 @@ PY
 后续改进建议
 -----------------
 
-- 让 `main.py` 支持命令行参数（`--input`, `--top_k`, `--no-progress` 等）。
+ - 让 `main.py` 支持命令行参数（`--input`/`--i`, `--mode` 等）。
 - 把知识库构建与检索模块进一步拆分并添加更多单元测试。
 - 优化 prompt 设计与输出后处理以提高 LLM 生成质量。
 

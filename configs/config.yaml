@@ -7,12 +7,19 @@ data_config:
   coco_annotations_path: "/home/m025/qqw/coco/annotations/captions_train2017.json"
 
 retrieval_config:
-  top_k: 3
-  use_patch_retrieval: false  # 为后续分块功能预留
+  top_k_global: 3    # 全局检索的相似图像数
+  top_k_patches: 3   # 每个局部块检索的相似文本数
+  use_patch_retrieval: true  # 是否在检索时启用分块检索（与 patch_config.enabled 一致）
 
 generation_config:
   max_length: 100
   num_beams: 3
+
+patch_config:
+  enabled: true  # 是否启用分块检索
+  patch_size: 224  # 块大小（像素）
+  stride: 224      # 滑动步长（无重叠）
+  top_k_patches: 1  # 每个块检索的文本描述数
 
 runtime_config:
   # 'deploy' -> on generation failure, use fallback composed from retrieved captions

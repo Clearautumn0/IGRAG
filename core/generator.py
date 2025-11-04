@@ -21,17 +21,18 @@ class CaptionGenerator:
     """
 
     PROMPT_TEMPLATE = (
-        "基于以下相似图像的描述，请生成一个准确且全面的图像描述：\n\n"
-        "相似图像描述：\n{descriptions}\n\n"
-        "请综合分析以上描述，生成一个新的图像描述：\n"
-        "\n(如果你更习惯英文，请用英文回答。)"
+        "Based on the following information, generate an accurate and comprehensive image description:\n\n"
+        "Overall similar image descriptions:\n{global_descriptions}\n\n"
+        "Key local region descriptions:\n{patch_descriptions_block}\n\n"
+        "Please synthesize the global and local information and generate a new image description:\n"
     )
 
     PROMPT_TEMPLATE_EN = (
-        "Based on the following similar image descriptions, generate ONE concise and comprehensive caption for the query image. "
-        "Do not copy the input sentences verbatim; synthesize and paraphrase.\n\n"
-        "Similar image descriptions:\n{descriptions}\n\n"
-        "Please synthesize the above and produce ONE new image description (one sentence):\n"
+        "You will receive both global and local observations about the query image. Prioritize the overall/global description to form a coherent scene understanding, and only use local observations to refine the quantity, color, details of small objects, and other subtle attributes. \n\n"
+        "Global information:Overall similar image descriptions (most important):\n{global_descriptions}\n\n"
+        "Local information:Key local observations (Use to refine details and quantity information.):\n{local_details}\n\n"
+        "Requirement:Please pay special attention to the quantity information provided in the local parts. For example, if there are three sentences in the local information describing the existence of a bird, then the global information should be three birds."
+        "Please synthesize the global and local information and produce ONE concise, natural-sounding image description (one sentences). Do NOT include any tags or list the observations verbatim; instead, integrate them into a single descriptive caption.Ultimately, form a sentence that describes a single picture.\n"
     )
 
     def __init__(self, config: Union[dict, str]):
@@ -77,37 +78,109 @@ class CaptionGenerator:
             logger.error(f"Failed to load LLM from {llm_path}: {e}")
             raise
 
-    def build_prompt(self, retrieved_captions: List[Union[str, dict]]) -> str:
+    def build_prompt(self, retrieved_captions: Union[List[Union[str, dict]], dict]) -> str:
         """Construct the prompt for the LLM from retrieved captions.
 
-        Accepts either a list of strings or a list of dicts with a 'captions' key.
-        Each entry becomes one description block.
-        """
-        descriptions = []
-        for item in retrieved_captions:
-            if isinstance(item, str):
-                text = item.strip()
-                if text:
-                    descriptions.append(text)
-            elif isinstance(item, dict):
-                # expect {'image_id': ..., 'score': ..., 'captions': [...]}
-                caps = item.get("captions", []) if item is not None else []
-                # join multiple captions per image with Chinese semicolon
-                if isinstance(caps, (list, tuple)):
-                    joined = "；".join([c.strip() for c in caps if c and isinstance(c, str)])
-                    if joined:
-                        descriptions.append(joined)
-                elif isinstance(caps, str):
-                    s = caps.strip()
-                    if s:
-                        descriptions.append(s)
-        # limit number of descriptions to avoid overly long prompts
-        if len(descriptions) > 20:
-            descriptions = descriptions[:20]
+        Supports two input formats:
+          - legacy: list[str] or list[dict] (each dict: {'image_id', 'score', 'captions'})
+          - new: dict with keys 'global' and 'patches' returned by ImageRetriever.get_retrieved_captions
 
-        desc_block = "\n".join(descriptions)
-        # prefer English prompt to avoid tokenizer <unk> issues with Chinese instructions
-        prompt = self.PROMPT_TEMPLATE_EN.format(descriptions=desc_block)
+        The resulting prompt will be fully English. Local (patch) descriptions are limited by
+        `generation_config.max_patch_descriptions` in the config to avoid an overly long prompt.
+        Optionally filters patch descriptions by a similarity threshold `generation_config.patch_similarity_threshold`.
+        """
+        # load config-driven limits (set in __init__)
+        max_patch = int(getattr(self, "max_patch_descriptions", 4))
+        patch_similarity_threshold = float(getattr(self, "patch_similarity_threshold", 0.0))
+
+        global_descriptions_list = []
+        patch_descriptions_map = {}
+
+        # normalize input
+        if isinstance(retrieved_captions, dict):
+            # expected shape: {'global': [{image_id, score, captions}], 'patches': {coord_key: [captions]}}
+            global_entries = retrieved_captions.get("global", [])
+            for item in global_entries:
+                if isinstance(item, dict):
+                    caps = item.get("captions", [])
+                    if isinstance(caps, (list, tuple)):
+                        joined = "; ".join([c.strip() for c in caps if c and isinstance(c, str)])
+                        if joined:
+                            global_descriptions_list.append(joined)
+                    elif isinstance(caps, str):
+                        s = caps.strip()
+                        if s:
+                            global_descriptions_list.append(s)
+                elif isinstance(item, str):
+                    s = item.strip()
+                    if s:
+                        global_descriptions_list.append(s)
+
+                patches = retrieved_captions.get("patches", {})
+                # patches is expected mapping like 'x,y'-> [captions or {caption,score}]
+                # collect local details across patches (no region labels)
+                local_details = []
+                seen_local = set()
+                for k in sorted(patches.keys()):
+                    vals = patches[k]
+                    if not vals:
+                        continue
+                    for v in vals:
+                        cap_text = None
+                        score = 0.0
+                        if isinstance(v, dict):
+                            cap_text = v.get("caption") or v.get("captions") or v.get("text")
+                            try:
+                                score = float(v.get("score", 0.0))
+                            except Exception:
+                                score = 0.0
+                        elif isinstance(v, str):
+                            cap_text = v
+                        if not cap_text:
+                            continue
+                        cap_text = cap_text.strip()
+                        # filter by similarity threshold if set
+                        if score < patch_similarity_threshold:
+                            continue
+                        if cap_text in seen_local:
+                            continue
+                        seen_local.add(cap_text)
+                        local_details.append(cap_text)
+                # limit local details to max_patch entries
+                if len(local_details) > max_patch:
+                    local_details = local_details[:max_patch]
+                # build a short local details block without region tags
+                patch_descriptions_map = {"local_summaries": local_details}
+
+        else:
+            # legacy list input
+            legacy_list = retrieved_captions if isinstance(retrieved_captions, list) else []
+            for item in legacy_list:
+                if isinstance(item, str):
+                    s = item.strip()
+                    if s:
+                        global_descriptions_list.append(s)
+                elif isinstance(item, dict):
+                    caps = item.get("captions", [])
+                    if isinstance(caps, (list, tuple)):
+                        joined = "; ".join([c.strip() for c in caps if c and isinstance(c, str)])
+                        if joined:
+                            global_descriptions_list.append(joined)
+                    elif isinstance(caps, str):
+                        s = caps.strip()
+                        if s:
+                            global_descriptions_list.append(s)
+
+        # limit overall descriptions to avoid huge prompt
+        if len(global_descriptions_list) > 20:
+            global_descriptions_list = global_descriptions_list[:20]
+
+        # Build patch description block limited to max_patch entries
+        global_block = "\n".join(global_descriptions_list)
+        local_block = "\n".join(patch_descriptions_map.get("local_summaries", [])) if patch_descriptions_map.get("local_summaries") else "None"
+
+        # prefer English template and instruct model to integrate local details without region tags
+        prompt = self.PROMPT_TEMPLATE_EN.format(global_descriptions=global_block, local_details=local_block)
         return prompt
 
     def _clean_output(self, text: str) -> str:
@@ -174,14 +247,14 @@ class CaptionGenerator:
         decoded = self.tokenizer.decode(out[0], skip_special_tokens=True)
         cleaned = self._clean_output(decoded)
 
-        if debug:
-            try:
-                print("\n--- raw generated token ids ---")
-                print(out[0].tolist()[:200])
-                print("--- raw decoded (skip_special_tokens=False) ---")
-                print(self.tokenizer.decode(out[0], skip_special_tokens=False))
-            except Exception as e:
-                print(f"Failed to print generated ids: {e}")
+        # if debug:
+        #     try:
+        #         print("\n--- raw generated token ids ---")
+        #         print(out[0].tolist()[:200])
+        #         print("--- raw decoded (skip_special_tokens=False) ---")
+        #         print(self.tokenizer.decode(out[0], skip_special_tokens=False))
+        #     except Exception as e:
+        #         print(f"Failed to print generated ids: {e}")
 
         # if output is clearly invalid or too short, retry with stronger beams and English prompt
         if not self._is_valid_caption(cleaned) or len(cleaned) <= 4:

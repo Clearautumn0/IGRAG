@@ -123,7 +123,9 @@ def main():
     llm_model_path = cfg.get("model_config", {}).get("llm_model_path")
     images_dir = cfg.get("data_config", {}).get("coco_images_dir")
     annotations_path = cfg.get("data_config", {}).get("coco_annotations_path")
-    top_k = cfg.get("retrieval_config", {}).get("top_k", 3)
+    # maintain compatibility: prefer top_k_global, fall back to top_k
+    top_k = cfg.get("retrieval_config", {}).get("top_k_global",
+                                                  cfg.get("retrieval_config", {}).get("top_k", 3))
     kb_path = cfg.get("knowledge_base_config", {}).get("knowledge_base_path")
     map_path = cfg.get("knowledge_base_config", {}).get("image_id_to_captions_path")
 
@@ -181,6 +183,87 @@ def main():
         save_pickle(image_id_to_captions_filtered, map_path)
     except Exception as e:
         logging.error(f"Failed to save mapping to {map_path}: {e}")
+        raise
+
+    # --- Build text knowledge base (CLIP text encoder) ---
+    text_kb_path = cfg.get("knowledge_base_config", {}).get(
+        "text_knowledge_base_path", os.path.join(os.path.dirname(kb_path) or ".", "text_knowledge_base.faiss")
+    )
+    text_map_path = cfg.get("knowledge_base_config", {}).get(
+        "text_id_to_captions_path", os.path.join(os.path.dirname(map_path) or ".", "text_descriptions.pkl")
+    )
+
+    # flatten all captions into a list (unique)
+    all_texts = []
+    seen_texts = set()
+    for caps in image_id_to_captions.values():
+        for c in caps:
+            if not c:
+                continue
+            if c in seen_texts:
+                continue
+            seen_texts.add(c)
+            all_texts.append(c)
+
+    if len(all_texts) == 0:
+        logging.warning("No text descriptions found to build text knowledge base.")
+        print("Knowledge base build complete.")
+        return
+
+    # extract text features using CLIP text encoder
+    def extract_text_features(model, processor, texts, device, batch_size=256):
+        all_feats = []
+        model.to(device)
+        model.eval()
+        for i in tqdm(range(0, len(texts), batch_size), desc="Extracting text features"):
+            batch_texts = texts[i : i + batch_size]
+            inputs = processor(text=batch_texts, return_tensors="pt", padding=True, truncation=True)
+            # move tensors to device
+            for k, v in inputs.items():
+                if isinstance(v, torch.Tensor):
+                    inputs[k] = v.to(device)
+
+            with torch.no_grad():
+                text_embeds = model.get_text_features(**inputs)
+
+            # normalize
+            text_embeds = text_embeds.cpu()
+            text_embeds = text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
+            all_feats.append(text_embeds.numpy())
+
+        if all_feats:
+            return np.concatenate(all_feats, axis=0)
+        else:
+            dim = getattr(model.config, "text_projection_dim", None) or getattr(model.config, "projection_dim", None) or 512
+            return np.zeros((0, int(dim)), dtype="float32")
+
+    try:
+        text_vectors = extract_text_features(model, processor, all_texts, device, batch_size=256)
+    except Exception as e:
+        logging.error(f"Failed during text feature extraction: {e}")
+        raise
+
+    try:
+        text_index = build_faiss_index(text_vectors.astype("float32"))
+    except Exception as e:
+        logging.error(f"Failed to build text FAISS index: {e}")
+        raise
+
+    # save text index and mapping
+    os.makedirs(os.path.dirname(text_kb_path) or ".", exist_ok=True)
+    os.makedirs(os.path.dirname(text_map_path) or ".", exist_ok=True)
+
+    try:
+        save_index(text_index, text_kb_path)
+    except Exception as e:
+        logging.error(f"Failed to save text FAISS index to {text_kb_path}: {e}")
+        raise
+
+    # text mapping: index -> caption
+    try:
+        save_pickle(all_texts, text_map_path)
+    except Exception as e:
+        logging.error(f"Failed to save text mapping to {text_map_path}: {e}")
         raise
 
     print("Knowledge base build complete.")

@@ -31,20 +31,57 @@ def run_pipeline(cfg: dict, test_image_path: str):
     retriever, generator = init_components(cfg)
 
     img = load_image(test_image_path)
-    # retrieve
-    retrieved = retriever.get_retrieved_captions(img)
-    if not retrieved:
+    # Global retrieval + optional patch retrieval
+    try:
+        retrieved = retriever.get_retrieved_captions(img)
+    except Exception as e:
+        logging.error(f"Retrieval failed: {e}")
+        print("No similar images found or knowledge base is empty.")
+        retrieved = {"global": [], "patches": {}}
+
+    # validate retrieved structure
+    if not isinstance(retrieved, dict):
+        # backwards compatibility: if retriever returned a list, convert to dict
+        global_list = retrieved if isinstance(retrieved, list) else []
+        retrieved = {"global": global_list, "patches": {}}
+
+    if not retrieved.get("global") and not retrieved.get("patches"):
         print("No similar images found or knowledge base is empty.")
         return
 
-    # show retrieved summaries
-    print("Retrieved images and their captions:")
-    for item in retrieved:
-        print(f"- Image ID: {item.get('image_id')}  Score: {item.get('score'):.4f}")
-        for c in item.get('captions', []):
-            print(f"    • {c}")
+    # show retrieved summaries (global)
+    print("Retrieved images and their captions (global):")
+    for item in retrieved.get("global", []):
+        try:
+            print(f"- Image ID: {item.get('image_id')}  Score: {item.get('score'):.4f}")
+            for c in item.get('captions', []):
+                print(f"    • {c}")
+        except Exception:
+            # defensive: skip malformed entries
+            continue
 
-    # build prompt and generate
+    # show patch-level summaries if present
+    if retrieved.get("patches"):
+        print("\nRetrieved patch-level descriptions:")
+        for region_key, caps in retrieved.get("patches", {}).items():
+            # region_key formatted as 'x,y' earlier
+            print(f"- Region {region_key}:")
+            if not caps:
+                print("    • (no captions)")
+                continue
+            # caps expected to be list of dicts {caption, score} or strings
+            for entry in caps:
+                if isinstance(entry, dict):
+                    cap = entry.get("caption") or entry.get("captions") or str(entry)
+                    score = entry.get("score")
+                    if score is not None:
+                        print(f"    • {cap}  (score: {score:.4f})")
+                    else:
+                        print(f"    • {cap}")
+                else:
+                    print(f"    • {entry}")
+
+    # build prompt and generate (generator supports both legacy list and new dict)
     prompt = generator.build_prompt(retrieved)
     # debug=True to print prompt and tokenization to help diagnose generation issues
     caption = generator.generate_caption(prompt, debug=True)
