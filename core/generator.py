@@ -35,10 +35,22 @@ class CaptionGenerator:
     )
     
     PROMPT_TEMPLATE_PATCH = (
-        "You are a professional image description generator.\n\n"
-        "{global_prompt_section}\n{global_descriptions}\n\n"
-        "{local_prompt_section}\n{local_descriptions}\n\n"
-        "{final_instruction}\n"
+        "You are a professional image description generator. Analyze the following information carefully:\n\n"
+        
+        "KEY LOCAL REGIONS ANALYSIS:\n"
+        "{local_descriptions}\n\n"
+        
+        "OVERALL CONTEXT:\n"
+        "{global_descriptions}\n\n"
+        
+        "CRITICAL ANALYSIS INSTRUCTIONS:\n"
+        "1. CAREFULLY COUNT how many DIFFERENT instances of the same object type are mentioned in the local regions.\n"
+        "2. If multiple local regions describe the SAME type of object (e.g., 'bird'), this indicates MULTIPLE instances in the image.\n"
+        "3. Use PLURAL form (e.g., 'birds', 'people', 'cars') when local descriptions suggest multiple instances.\n"
+        "4. Integrate information from both local regions and overall context to form a comprehensive description.\n"
+        "5. Pay special attention to object counts and spatial relationships between different objects.\n\n"
+        
+        "Based on this analysis, generate a new, accurate and comprehensive image description:"
     )
 
     def __init__(self, config: Union[dict, str]):
@@ -69,8 +81,8 @@ class CaptionGenerator:
         patch_config = cfg.get("patch_config", {})
         self.global_prompt_section = patch_config.get("global_prompt_section", "Overall similar image descriptions:")
         self.local_prompt_section = patch_config.get("local_prompt_section", "Key local regions with similar descriptions:")
-        self.final_instruction = patch_config.get("final_instruction", 
-            "Please synthesize all the above descriptions, paying special attention to the consistency of local details, and generate a new, accurate and comprehensive image description.")
+        # self.final_instruction = patch_config.get("final_instruction", 
+        #     "Please synthesize all the above descriptions, paying special attention to the consistency of local details, and generate a new, accurate and comprehensive image description.")
 
         if not llm_path:
             logger.error("LLM model path missing in config")
@@ -194,7 +206,7 @@ class CaptionGenerator:
             global_descriptions=global_block,
             local_prompt_section=self.local_prompt_section,
             local_descriptions=local_block,
-            final_instruction=self.final_instruction
+            # final_instruction=self.final_instruction
         )
         
         # 检查提示词长度，如果过长则截断

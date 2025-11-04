@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 import yaml
 import argparse
+import os
+import shutil
 from datetime import datetime
 
 from core.retriever import ImageRetriever
@@ -209,6 +211,22 @@ def run_pipeline(cfg: dict, test_image_path: str):
 
 
 def main():
+
+    folder = "./output/debug_patches"
+
+    if os.path.exists(folder):
+        for filename in os.listdir(folder):
+            file_path = os.path.join(folder, filename)
+            try:
+                if os.path.isfile(file_path) or os.path.islink(file_path):
+                    os.unlink(file_path)
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path)
+            except Exception as e:
+                print(f"Failed to delete {file_path}. Reason: {e}")
+
+
+
     parser = argparse.ArgumentParser(description="IGRAG: image retrieval-augmented generation")
     parser.add_argument("--mode", type=str, choices=["deploy", "test"], help="Override runtime mode (deploy/test)")
     parser.add_argument("--i", "--input", dest="input", type=str, help="Input image path (default: input/test_image.jpg)")

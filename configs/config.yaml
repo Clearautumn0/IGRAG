@@ -7,7 +7,7 @@ data_config:
   coco_annotations_path: "/home/m025/qqw/coco/annotations/captions_train2017.json"
 
 retrieval_config:
-  top_k: 3
+  top_k: 1
   use_patch_retrieval: true  # 启用分块检索功能
 
 generation_config:
@@ -33,12 +33,12 @@ patch_config:
   expand_ratio: 0.1  # 边界框扩展比例
   
   # 局部检索配置
-  local_retrieval_top_k: 2  # 每个局部区域检索的top_k
+  local_retrieval_top_k: 1  # 每个局部区域检索的top_k
   
   # 提示词模板配置
-  global_prompt_section: "Overall similar image descriptions:"
-  local_prompt_section: "Key local regions with similar descriptions:"
-  final_instruction: "Please synthesize all the above descriptions, paying special attention to the consistency of local details, and generate a new, accurate and comprehensive image description."
+  global_prompt_section:   "### Global Context (Overall Scene):\n"
+  local_prompt_section: "### Localized Details (Key Regions):\n"
+  # final_instruction:  "CRITICAL ANALYSIS INSTRUCTIONS:\n 1. Identify common patterns and recurring elements across ALL descriptions\n 2. Infer the complete scene by synthesizing information from multiple local regions\n 3. Count important elements when similar objects appear in multiple local descriptions\n 4. Generate ONE coherent sentence that captures the entire scene\n 5. DO NOT copy any existing description verbatim - create entirely new phrasing\n 6. Output exactly ONE sentence without bullet points or line breaks\n 7. Focus on what the image actually contains based on all available evidence\n\n Final image description:"
   
   # 调试选项
   save_debug_patches: true  # 是否保存检测到的区域图像用于调试
