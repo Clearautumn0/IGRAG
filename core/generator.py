@@ -192,13 +192,12 @@ class CaptionGenerator:
         for class_label, descs in grouped.items():
             if not descs:
                 continue
-            # 生成结构化分组块
-            section_lines = [f"OBJECT TYPE: {class_label}"]
-            for i, d in enumerate(descs, start=1):
-                section_lines.append(f"- Instance {i}: {d}")
-            local_sections.append("\n".join(section_lines))
+            # 只输出类别及实例数量，例如 "bird:3"
+            count = len(descs)
+            local_sections.append(f"{class_label}:{count}")
 
-        local_block = "\n\n".join(local_sections) if local_sections else "None"
+        # 使用单行换行连接每个类别:数量，示例："bird:3\ndog:2"
+        local_block = "\n".join(local_sections) if local_sections else "None"
         
         # 构建完整提示词
         prompt = self.PROMPT_TEMPLATE_PATCH.format(
