@@ -83,6 +83,12 @@ class ImageRetriever:
 
         # preserve ordering to map faiss indices -> image ids
         self.index_id_to_image_id = list(self.image_id_to_captions.keys())
+        
+        # 保存配置用于分块检索
+        self.config = cfg
+        self.use_patch_retrieval = False
+        self.patch_detector = None
+        self.local_retriever = None
 
     def extract_features(self, image: Union[str, Image.Image]) -> 'np.ndarray':
         """Extract CLIP image features for a single image.
@@ -156,3 +162,84 @@ class ImageRetriever:
             captions = self.image_id_to_captions.get(image_id, [])
             out.append({"image_id": image_id, "score": score, "captions": captions})
         return out
+
+    def enable_patch_retrieval(self):
+        """启用分块检索模式，初始化PatchDetector和LocalRetriever。"""
+        if self.use_patch_retrieval:
+            return  # 已经启用
+        
+        try:
+            from core.patch_detector import PatchDetector
+            from core.local_retriever import LocalRetriever
+            
+            self.patch_detector = PatchDetector(self.config)
+            self.local_retriever = LocalRetriever(self, self.config)
+            self.use_patch_retrieval = True
+            logger.info("Patch retrieval enabled")
+        except Exception as e:
+            logger.error(f"Failed to enable patch retrieval: {e}")
+            self.use_patch_retrieval = False
+            raise
+
+    def retrieve_with_patches(self, query_image: Union[str, Image.Image]) -> Dict:
+        """执行包含分块的完整检索流程。
+        
+        Args:
+            query_image: 查询图像（路径或PIL.Image）
+            
+        Returns:
+            结构化检索结果：
+            {
+                "global_descriptions": [{"image_id": ..., "score": ..., "captions": [...]}],
+                "local_regions": [
+                    {
+                        "bbox": [x1, y1, x2, y2],
+                        "class_label": "类别名称",
+                        "confidence": 置信度,
+                        "descriptions": [描述列表]
+                    }
+                ]
+            }
+        """
+        if isinstance(query_image, str):
+            img = load_image(query_image)
+        elif isinstance(query_image, Image.Image):
+            img = query_image
+        else:
+            raise ValueError("query_image must be a file path or PIL.Image.Image")
+        
+        # 确保分块检索已启用
+        if not self.use_patch_retrieval:
+            self.enable_patch_retrieval()
+        
+        # 1. 执行全局检索
+        retrieval_config = self.config.get("retrieval_config", {})
+        global_top_k = retrieval_config.get("top_k", 3)
+        global_descriptions = self.get_retrieved_captions(img, top_k=global_top_k)
+        
+        # 2. 执行目标检测和局部检索
+        local_regions = []
+        try:
+            # 检测显著物体
+            detections = self.patch_detector.detect_objects(img)
+            filtered_detections = self.patch_detector.filter_detections(detections)
+            
+            if filtered_detections:
+                # 裁剪区域
+                image_patches = self.patch_detector.crop_regions(img, filtered_detections)
+                
+                # 对每个局部区域进行检索
+                local_results = self.local_retriever.retrieve_local_descriptions(image_patches)
+                local_regions = self.local_retriever.merge_local_descriptions(local_results)
+                
+                logger.info(f"Retrieved {len(local_regions)} local regions with descriptions")
+            else:
+                logger.warning("No objects detected, using global descriptions only")
+        except Exception as e:
+            logger.error(f"Patch retrieval failed: {e}, falling back to global retrieval only")
+            # 失败时回退到全局检索
+        
+        return {
+            "global_descriptions": global_descriptions,
+            "local_regions": local_regions
+        }

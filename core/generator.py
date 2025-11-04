@@ -33,6 +33,13 @@ class CaptionGenerator:
         "Similar image descriptions:\n{descriptions}\n\n"
         "Please synthesize the above and produce ONE new image description (one sentence):\n"
     )
+    
+    PROMPT_TEMPLATE_PATCH = (
+        "You are a professional image description generator.\n\n"
+        "{global_prompt_section}\n{global_descriptions}\n\n"
+        "{local_prompt_section}\n{local_descriptions}\n\n"
+        "{final_instruction}\n"
+    )
 
     def __init__(self, config: Union[dict, str]):
         """Load FLAN-T5 model and tokenizer.
@@ -56,6 +63,14 @@ class CaptionGenerator:
         # additional generation knobs
         self.min_length = int(gen_cfg.get("min_length", 10))
         self.repetition_penalty = float(gen_cfg.get("repetition_penalty", 1.2))
+        
+        # 保存配置用于提示词构建
+        self.config = cfg
+        patch_config = cfg.get("patch_config", {})
+        self.global_prompt_section = patch_config.get("global_prompt_section", "Overall similar image descriptions:")
+        self.local_prompt_section = patch_config.get("local_prompt_section", "Key local regions with similar descriptions:")
+        self.final_instruction = patch_config.get("final_instruction", 
+            "Please synthesize all the above descriptions, paying special attention to the consistency of local details, and generate a new, accurate and comprehensive image description.")
 
         if not llm_path:
             logger.error("LLM model path missing in config")
@@ -77,12 +92,26 @@ class CaptionGenerator:
             logger.error(f"Failed to load LLM from {llm_path}: {e}")
             raise
 
-    def build_prompt(self, retrieved_captions: List[Union[str, dict]]) -> str:
+    def build_prompt(self, retrieved_captions: Union[List[Union[str, dict]], dict]) -> str:
         """Construct the prompt for the LLM from retrieved captions.
-
-        Accepts either a list of strings or a list of dicts with a 'captions' key.
-        Each entry becomes one description block.
+        
+        支持两种输入格式：
+        1. 传统格式：List[dict] 或 List[str] - 仅全局描述
+        2. 分块格式：dict - 包含全局描述和局部区域描述
+        
+        Args:
+            retrieved_captions: 
+                - 传统格式: List[dict] 每个dict包含 'captions' 键
+                - 分块格式: {"global_descriptions": [...], "local_regions": [...]}
         """
+        # 检查是否为分块格式
+        if isinstance(retrieved_captions, dict) and "global_descriptions" in retrieved_captions:
+            return self._build_patch_prompt(retrieved_captions)
+        else:
+            return self._build_standard_prompt(retrieved_captions)
+    
+    def _build_standard_prompt(self, retrieved_captions: List[Union[str, dict]]) -> str:
+        """构建标准提示词（仅全局描述）。"""
         descriptions = []
         for item in retrieved_captions:
             if isinstance(item, str):
@@ -108,6 +137,74 @@ class CaptionGenerator:
         desc_block = "\n".join(descriptions)
         # prefer English prompt to avoid tokenizer <unk> issues with Chinese instructions
         prompt = self.PROMPT_TEMPLATE_EN.format(descriptions=desc_block)
+        return prompt
+    
+    def _build_patch_prompt(self, retrieved_data: dict) -> str:
+        """构建包含全局和局部描述的分层提示词。
+        
+        Args:
+            retrieved_data: {
+                "global_descriptions": [{"image_id": ..., "score": ..., "captions": [...]}],
+                "local_regions": [
+                    {
+                        "bbox": [x1, y1, x2, y2],
+                        "class_label": "类别名称",
+                        "confidence": 置信度,
+                        "descriptions": [描述列表]
+                    }
+                ]
+            }
+        """
+        # 处理全局描述
+        global_descriptions = []
+        for item in retrieved_data.get("global_descriptions", []):
+            caps = item.get("captions", [])
+            if isinstance(caps, (list, tuple)):
+                joined = "; ".join([c.strip() for c in caps if c and isinstance(c, str)])
+                if joined:
+                    global_descriptions.append(joined)
+            elif isinstance(caps, str) and caps.strip():
+                global_descriptions.append(caps.strip())
+        
+        # 限制全局描述数量
+        if len(global_descriptions) > 10:
+            global_descriptions = global_descriptions[:10]
+        
+        global_block = "\n".join([f"- {desc}" for desc in global_descriptions]) if global_descriptions else "None"
+        
+        # 处理局部描述
+        local_regions = retrieved_data.get("local_regions", [])
+        local_descriptions_list = []
+        
+        for idx, region in enumerate(local_regions):
+            class_label = region.get("class_label", f"object_{idx+1}")
+            descriptions = region.get("descriptions", [])
+            
+            if descriptions:
+                # 限制每个区域的描述数量
+                region_descs = descriptions[:3]  # 每个区域最多3个描述
+                desc_text = "; ".join([d.strip() for d in region_descs if d and isinstance(d, str)])
+                if desc_text:
+                    local_descriptions_list.append(f"- Region {idx+1} ({class_label}): {desc_text}")
+        
+        local_block = "\n".join(local_descriptions_list) if local_descriptions_list else "None"
+        
+        # 构建完整提示词
+        prompt = self.PROMPT_TEMPLATE_PATCH.format(
+            global_prompt_section=self.global_prompt_section,
+            global_descriptions=global_block,
+            local_prompt_section=self.local_prompt_section,
+            local_descriptions=local_block,
+            final_instruction=self.final_instruction
+        )
+        
+        # 检查提示词长度，如果过长则截断
+        max_prompt_length = 2000  # 字符数限制
+        if len(prompt) > max_prompt_length:
+            logger.warning(f"Prompt too long ({len(prompt)} chars), truncating...")
+            # 简单截断到最大长度
+            prompt = prompt[:max_prompt_length] + "..."
+        
         return prompt
 
     def _clean_output(self, text: str) -> str:
