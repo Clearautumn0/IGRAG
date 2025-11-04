@@ -31,26 +31,21 @@ class CaptionGenerator:
         "Based on the following similar image descriptions, generate ONE concise and comprehensive caption for the query image. "
         "Do not copy the input sentences verbatim; synthesize and paraphrase.\n\n"
         "Similar image descriptions:\n{descriptions}\n\n"
-        "Please synthesize the above and produce ONE new image description (one sentence):\n"
+        "Please describe the image in one sentence based on the overall description and the number of entities in the image (do not directly copy the description above).:\n"
     )
     
     PROMPT_TEMPLATE_PATCH = (
-        "You are a professional image description generator. Analyze the following information carefully:\n\n"
+        "Here is a brand-new image A. You need to describe it in one sentence. Below are some descriptions of image B which is similar to A, as well as the information about the entities existing in image A and the quantity of each entity:\n\n"
         
-        "KEY LOCAL REGIONS ANALYSIS:\n"
-        "{local_descriptions}\n\n"
-        
-        "OVERALL CONTEXT:\n"
+       "Descriptions of similar image B:  \n"
         "{global_descriptions}\n\n"
-        
-        "CRITICAL ANALYSIS INSTRUCTIONS:\n"
-        "1. CAREFULLY COUNT how many DIFFERENT instances of the same object type are mentioned in the local regions.\n"
-        "2. If multiple local regions describe the SAME type of object (e.g., 'bird'), this indicates MULTIPLE instances in the image.\n"
-        "3. Use PLURAL form (e.g., 'birds', 'people', 'cars') when local descriptions suggest multiple instances.\n"
-        "4. Integrate information from both local regions and overall context to form a comprehensive description.\n"
-        "5. Pay special attention to object counts and spatial relationships between different objects.\n\n"
-        
-        "Based on this analysis, generate a new, accurate and comprehensive image description:"
+        "The entities and their quantities in the image A are:\n"
+        "{local_descriptions}\n\n"
+        # "The description of the entities in Image A (for reference only):\n"
+        # "{local_entry_desc}\n\n"
+
+        "Please describe the content of image A based on the description of similar image B and the entity: quantity information existing in image A (requcirement: only one sentence is allowed for the description, only one sentence is allowed for the description)).\n"
+        "Please return the description of this image A:\n"
     )
 
     def __init__(self, config: Union[dict, str]):
@@ -189,24 +184,36 @@ class CaptionGenerator:
         grouped = self.group_local_descriptions_by_class(local_regions)
 
         local_sections = []
+        local_entrys = []
         for class_label, descs in grouped.items():
             if not descs:
                 continue
+
+
+        # local_block = "\n\n".join(local_sections) if local_sections else "None"
+         # 只输出类别及实例数量，例如 "bird:3"
+            count = len(descs)
+            local_sections.append(f"{class_label}:{count}")
+
             # 生成结构化分组块
             section_lines = [f"OBJECT TYPE: {class_label}"]
             for i, d in enumerate(descs, start=1):
                 section_lines.append(f"- Instance {i}: {d}")
-            local_sections.append("\n".join(section_lines))
+            local_entrys.append("\n".join(section_lines))
 
-        local_block = "\n\n".join(local_sections) if local_sections else "None"
-        
+
+
+
+        # 使用单行换行连接每个类别:数量，示例："bird:3\ndog:2"
+        local_block = "\n".join(local_sections) if local_sections else "None"
+        local_entrys_block = "\n\n".join(local_entrys) if local_entrys else "None"
         # 构建完整提示词
         prompt = self.PROMPT_TEMPLATE_PATCH.format(
             global_prompt_section=self.global_prompt_section,
             global_descriptions=global_block,
             local_prompt_section=self.local_prompt_section,
             local_descriptions=local_block,
-            # final_instruction=self.final_instruction
+            local_entry_desc=local_entrys_block
         )
         
         # 检查提示词长度，如果过长则截断
