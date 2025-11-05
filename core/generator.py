@@ -301,7 +301,7 @@ class CaptionGenerator:
                 if not is_similar:
                     reps.append(d)
                     grouped[class_key].append(d.strip())
-
+    
         # 保持类别顺序
         ordered_grouped = {k: grouped[k] for k in class_order}
         return ordered_grouped
