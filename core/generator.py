@@ -193,7 +193,8 @@ class CaptionGenerator:
             if not descs:
                 continue
             # 只输出类别及实例数量，例如 "bird:3"
-            count = len(descs)
+            # count = len(descs)
+            count = sum(1 for region in local_regions if region['class_label'] == class_label)
             local_sections.append(f"{class_label}:{count}")
 
         # 使用单行换行连接每个类别:数量，示例："bird:3\ndog:2"
