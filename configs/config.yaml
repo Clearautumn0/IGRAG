@@ -7,7 +7,7 @@ data_config:
   coco_annotations_path: "/home/m025/qqw/coco/annotations/captions_train2017.json"
 
 retrieval_config:
-  top_k: 1
+  top_k: 3
   use_patch_retrieval: true  # 启用分块检索功能
 
 generation_config:
