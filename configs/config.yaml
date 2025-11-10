@@ -1,6 +1,7 @@
 model_config:
   clip_model_path: "../models/clip-vit-base-patch32/"
   llm_model_path: "../models/Qwen2.5-3B-instruct/"
+  detection_model_path: "../models/DETR/"
 
 data_config:
   coco_images_dir: "/home/m025/qqw/coco/train2017/"
@@ -34,11 +35,6 @@ patch_config:
   
   # 局部检索配置
   local_retrieval_top_k: 1  # 每个局部区域检索的top_k
-  
-  # 提示词模板配置
-  global_prompt_section:   "### Global Context (Overall Scene):\n"
-  local_prompt_section: "### Localized Details (Key Regions):\n"
-  # final_instruction:  "CRITICAL ANALYSIS INSTRUCTIONS:\n 1. Identify common patterns and recurring elements across ALL descriptions\n 2. Infer the complete scene by synthesizing information from multiple local regions\n 3. Count important elements when similar objects appear in multiple local descriptions\n 4. Generate ONE coherent sentence that captures the entire scene\n 5. DO NOT copy any existing description verbatim - create entirely new phrasing\n 6. Output exactly ONE sentence without bullet points or line breaks\n 7. Focus on what the image actually contains based on all available evidence\n\n Final image description:"
-  
+
   # 调试选项
   save_debug_patches: true  # 是否保存检测到的区域图像用于调试
