@@ -27,7 +27,7 @@ class CaptionGenerator:
     )
     
     PROMPT_TEMPLATE_PATCH = (
-        "Here is a brand-new image A. You need to describe it in one sentence. Below are some descriptions of image B which is similar to A, as well as the information about the entities existing in image A and the quantity of each entity:\n\n"
+        "You are an expert in describing image content.Here is a brand-new image A. You need to describe it in one sentence. Below are some descriptions of image B which is similar to A, as well as the information about the entities existing in image A and the quantity of each entity:\n\n"
         
        "Descriptions of similar image B:  \n"
         "{global_descriptions}\n\n"
@@ -35,8 +35,8 @@ class CaptionGenerator:
         "{local_descriptions}\n\n"
 
 
-        "Please describe the content of image A based on the description of similar image B and the entity: quantity information existing in image A (requcirement: only one sentence is allowed for the description, only one sentence is allowed for the description)).\n"
-        "Please return the description of this image A(Describe it in one sentence.):\n"
+        "Please describe the content of image A based on the description of similar image B and the entity: quantity information existing in image A (requcirement:only one sentence is allowed for the description)).\n"
+        "Please return the description of this image A(Describe the content of the image without including information such as Image A or Image B. Keep the translation natural and fluent, and follow English expression habits.):\n"
     )
 
     def __init__(self, config: Union[dict, str]):
