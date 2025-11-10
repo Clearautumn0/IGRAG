@@ -33,6 +33,8 @@ class CaptionGenerator:
         "{global_descriptions}\n\n"
         "The entities and their quantities in the image A are:\n"
         "{local_descriptions}\n\n"
+        # "The description of the entities in Image A (for reference only):\n"
+        # "{local_entry_desc}\n\n"
 
         "Please describe the content of image A based on the description of similar image B and the entity: quantity information existing in image A (requcirement: only one sentence is allowed for the description, only one sentence is allowed for the description)).\n"
         "Please return the description of this image A:\n"
@@ -202,8 +204,7 @@ class CaptionGenerator:
             global_prompt_section=self.global_prompt_section,
             global_descriptions=global_block,
             local_prompt_section=self.local_prompt_section,
-            local_descriptions=local_block,
-            local_entry_desc=local_entrys_block
+            local_descriptions=local_block
         )
         
         # 检查提示词长度，如果过长则截断
