@@ -1,11 +1,11 @@
 import os
 import logging
 import re
-from typing import List, Union
+from typing import Dict, List, Optional, Union
 
 import torch
 import yaml
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
 logger = logging.getLogger(__name__)
@@ -19,14 +19,6 @@ class CaptionGenerator:
         prompt = gen.build_prompt(retrieved_captions)
         caption = gen.generate_caption(prompt)
     """
-
-    PROMPT_TEMPLATE = (
-        "基于以下相似图像的描述，请生成一个准确且全面的图像描述：\n\n"
-        "相似图像描述：\n{descriptions}\n\n"
-        "请综合分析以上描述，生成一个新的图像描述：\n"
-        "\n(如果你更习惯英文，请用英文回答。)"
-    )
-
     PROMPT_TEMPLATE_EN = (
         "Based on the following similar image descriptions, generate ONE concise and comprehensive caption for the query image. "
         "Do not copy the input sentences verbatim; synthesize and paraphrase.\n\n"
@@ -41,15 +33,13 @@ class CaptionGenerator:
         "{global_descriptions}\n\n"
         "The entities and their quantities in the image A are:\n"
         "{local_descriptions}\n\n"
-        # "The description of the entities in Image A (for reference only):\n"
-        # "{local_entry_desc}\n\n"
 
         "Please describe the content of image A based on the description of similar image B and the entity: quantity information existing in image A (requcirement: only one sentence is allowed for the description, only one sentence is allowed for the description)).\n"
         "Please return the description of this image A:\n"
     )
 
     def __init__(self, config: Union[dict, str]):
-        """Load FLAN-T5 model and tokenizer.
+        """Load Qwen causal model and tokenizer.
 
         Args:
             config: dict or path to YAML config (same structure as configs/config.yaml)
@@ -70,6 +60,8 @@ class CaptionGenerator:
         # additional generation knobs
         self.min_length = int(gen_cfg.get("min_length", 10))
         self.repetition_penalty = float(gen_cfg.get("repetition_penalty", 1.2))
+        self.temperature = float(gen_cfg.get("temperature", 0.7))
+        self.top_p = float(gen_cfg.get("top_p", 0.9))
         
         # 保存配置用于提示词构建
         self.config = cfg
@@ -84,16 +76,25 @@ class CaptionGenerator:
             raise ValueError("llm_model_path required in config")
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.system_prompt = cfg.get(
+            "model_config", {}
+        ).get(
+            "system_prompt",
+            "You are a helpful assistant that specializes in writing concise, comprehensive image captions.",
+        )
 
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(llm_path, use_fast=True)
-            # ensure pad token exists (T5 sometimes doesn't set pad_token)
+            tokenizer_kwargs = dict(trust_remote_code=True, use_fast=False)
+            self.tokenizer = AutoTokenizer.from_pretrained(llm_path, **tokenizer_kwargs)
             if getattr(self.tokenizer, "pad_token_id", None) is None:
-                try:
-                    self.tokenizer.pad_token = self.tokenizer.eos_token
-                except Exception:
-                    pass
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(llm_path).to(self.device)
+                pad_token = getattr(self.tokenizer, "eos_token", None)
+                if pad_token:
+                    self.tokenizer.pad_token = pad_token
+            model_kwargs = {"trust_remote_code": True}
+            if self.device.type == "cuda":
+                model_kwargs["torch_dtype"] = torch.float16
+            self.model = AutoModelForCausalLM.from_pretrained(llm_path, **model_kwargs)
+            self.model.to(self.device)
             self.model.eval()
         except Exception as e:
             logger.error(f"Failed to load LLM from {llm_path}: {e}")
@@ -341,22 +342,70 @@ class CaptionGenerator:
                 print(f"Failed to show tokenized prompt: {e}")
 
         # primary generation attempt
-        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True).to(self.device)
+        def _build_chat_inputs(user_prompt: str):
+            messages = []
+            if self.system_prompt:
+                messages.append({"role": "system", "content": self.system_prompt})
+            messages.append({"role": "user", "content": user_prompt})
+            try:
+                chat_text = self.tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+            except AttributeError:
+                chat_text = user_prompt
+            tokenized = self.tokenizer(
+                chat_text,
+                return_tensors="pt",
+                truncation=True,
+                padding=True,
+            )
+            tokenized = {k: v.to(self.device) for k, v in tokenized.items()}
+            return tokenized
 
-        gen_kwargs = dict(
-            max_length=self.max_length,
-            min_length=self.min_length,
-            num_beams=self.num_beams,
-            early_stopping=True,
-            no_repeat_ngram_size=3,
-            length_penalty=1.0,
-            repetition_penalty=self.repetition_penalty,
-        )
+        def _run_generation(user_prompt: str, override_kwargs: Optional[Dict] = None) -> str:
+            chat_inputs = _build_chat_inputs(user_prompt)
+            pad_token_id = self.tokenizer.pad_token_id
+            eos_token_id = self.tokenizer.eos_token_id
+            if pad_token_id is None:
+                pad_token_id = getattr(self.model.config, "pad_token_id", None) or getattr(
+                    self.model.config, "eos_token_id", None
+                )
+            if eos_token_id is None:
+                eos_token_id = getattr(self.model.config, "eos_token_id", None)
 
-        with torch.no_grad():
-            out = self.model.generate(**inputs, **gen_kwargs)
+            prompt_len = chat_inputs["input_ids"].shape[1]
+            total_min_length = min(prompt_len + self.min_length, prompt_len + self.max_length)
 
-        decoded = self.tokenizer.decode(out[0], skip_special_tokens=True)
+            gen_kwargs = dict(
+                max_new_tokens=self.max_length,
+                min_length=total_min_length,
+                num_beams=self.num_beams,
+                early_stopping=True,
+                no_repeat_ngram_size=3,
+                length_penalty=1.0,
+                repetition_penalty=self.repetition_penalty,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                eos_token_id=eos_token_id,
+                pad_token_id=pad_token_id,
+            )
+            if override_kwargs:
+                overrides = dict(override_kwargs)
+                min_length_offset = overrides.pop("min_length_offset", None)
+                if min_length_offset is not None:
+                    gen_kwargs["min_length"] = min(
+                        prompt_len + min_length_offset, prompt_len + self.max_length
+                    )
+                gen_kwargs.update(overrides)
+            with torch.no_grad():
+                output = self.model.generate(
+                    input_ids=chat_inputs["input_ids"],
+                    attention_mask=chat_inputs.get("attention_mask"),
+                    **gen_kwargs,
+                )
+            return self.tokenizer.decode(output[0], skip_special_tokens=True)
+
+        decoded = _run_generation(prompt)
         cleaned = self._clean_output(decoded)
 
         # if debug:
@@ -372,11 +421,13 @@ class CaptionGenerator:
         if not self._is_valid_caption(cleaned) or len(cleaned) <= 4:
             # retry 1: increase beams and min length
             try:
-                gen_kwargs["num_beams"] = max(self.num_beams, 5)
-                gen_kwargs["min_length"] = max(self.min_length, 15)
-                with torch.no_grad():
-                    out2 = self.model.generate(**inputs, **gen_kwargs)
-                decoded2 = self.tokenizer.decode(out2[0], skip_special_tokens=True)
+                alt_kwargs = {
+                    "num_beams": max(self.num_beams, 5),
+                    "min_length_offset": max(self.min_length, 15),
+                    "temperature": min(self.temperature, 0.7),
+                    "top_p": max(self.top_p, 0.9),
+                }
+                decoded2 = _run_generation(prompt, alt_kwargs)
                 cleaned2 = self._clean_output(decoded2)
                 if self._is_valid_caption(cleaned2) and len(cleaned2) > len(cleaned):
                     return cleaned2
@@ -385,18 +436,8 @@ class CaptionGenerator:
 
             # retry 2: use English prompt as fallback
             try:
-                # build english prompt using descriptions extracted from original prompt
-                # attempt to extract {descriptions} block
-                if "{descriptions}" in self.PROMPT_TEMPLATE_EN:
-                    # naive: reuse prompt but treat as english
-                    en_prompt = self.PROMPT_TEMPLATE_EN.format(descriptions=prompt)
-                else:
-                    en_prompt = self.PROMPT_TEMPLATE_EN.format(descriptions=prompt)
-
-                inputs2 = self.tokenizer(en_prompt, return_tensors="pt", truncation=True).to(self.device)
-                with torch.no_grad():
-                    out3 = self.model.generate(**inputs2, **gen_kwargs)
-                decoded3 = self.tokenizer.decode(out3[0], skip_special_tokens=True)
+                en_prompt = self.PROMPT_TEMPLATE_EN.format(descriptions=prompt)
+                decoded3 = _run_generation(en_prompt)
                 cleaned3 = self._clean_output(decoded3)
                 if self._is_valid_caption(cleaned3):
                     return cleaned3

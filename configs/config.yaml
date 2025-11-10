@@ -1,6 +1,6 @@
 model_config:
   clip_model_path: "../models/clip-vit-base-patch32/"
-  llm_model_path: "../models/flan-t5-base/"
+  llm_model_path: "../models/Qwen2.5-3B-instruct/"
 
 data_config:
   coco_images_dir: "/home/m025/qqw/coco/train2017/"
