@@ -192,7 +192,8 @@ class CaptionGenerator:
 
         # local_block = "\n\n".join(local_sections) if local_sections else "None"
          # 只输出类别及实例数量，例如 "bird:3"
-            count = len(descs)
+            # count = len(descs)
+            count = sum(1 for region in local_regions if region['class_label'] == class_label)
             local_sections.append(f"{class_label}:{count}")
 
             # 生成结构化分组块
