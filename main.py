@@ -72,8 +72,16 @@ def run_pipeline(cfg: dict, test_image_path: str):
     # 检查是否启用分块检索
     use_patch_retrieval = cfg.get("retrieval_config", {}).get("use_patch_retrieval", False)
     
+    verbose = cfg.get("runtime_config", {}).get("verbose", False)
+
+    def _print_model_prompt(prompt_text: str):
+        print("\n=== MODEL PROMPT INPUT ===\n")
+        print(prompt_text)
+        print()
+
     if use_patch_retrieval:
-        print("Using patch retrieval mode...")
+        if verbose:
+            print("Using patch retrieval mode...")
         retrieval_start = time.time()
         
         try:
@@ -90,30 +98,31 @@ def run_pipeline(cfg: dict, test_image_path: str):
             # 显示检索统计信息
             global_descriptions = retrieved_data.get("global_descriptions", [])
             local_regions = retrieved_data.get("local_regions", [])
-            
-            print(f"\nRetrieval completed in {retrieval_time:.2f}s")
-            print(f"Global descriptions: {len(global_descriptions)}")
-            print(f"Local regions detected: {len(local_regions)}")
-            
-            # 显示全局描述
-            if global_descriptions:
-                print("\nGlobal similar images and their captions:")
-                for item in global_descriptions:
-                    print(f"- Image ID: {item.get('image_id')}  Score: {item.get('score'):.4f}")
-                    for c in item.get('captions', [])[:2]:  # 只显示前2个描述
-                        print(f"    • {c}")
-            
-            # 显示局部区域信息
-            if local_regions:
-                print("\nDetected local regions:")
-                for idx, region in enumerate(local_regions):
-                    print(f"  Region {idx+1}: {region.get('class_label')} "
-                          f"(confidence: {region.get('confidence', 0):.3f})")
-                    descs = region.get('descriptions', [])
-                    if descs:
-                        print(f"    Retrieved descriptions: {len(descs)}")
-                        for desc in descs[:2]:  # 只显示前2个描述
-                            print(f"      • {desc}")
+
+            if verbose:
+                print(f"\nRetrieval completed in {retrieval_time:.2f}s")
+                print(f"Global descriptions: {len(global_descriptions)}")
+                print(f"Local regions detected: {len(local_regions)}")
+                
+                # 显示全局描述
+                if global_descriptions:
+                    print("\nGlobal similar images and their captions:")
+                    for item in global_descriptions:
+                        print(f"- Image ID: {item.get('image_id')}  Score: {item.get('score'):.4f}")
+                        for c in item.get('captions', [])[:2]:  # 只显示前2个描述
+                            print(f"    • {c}")
+                
+                # 显示局部区域信息
+                if local_regions:
+                    print("\nDetected local regions:")
+                    for idx, region in enumerate(local_regions):
+                        print(f"  Region {idx+1}: {region.get('class_label')} "
+                              f"(confidence: {region.get('confidence', 0):.3f})")
+                        descs = region.get('descriptions', [])
+                        if descs:
+                            print(f"    Retrieved descriptions: {len(descs)}")
+                            for desc in descs[:2]:  # 只显示前2个描述
+                                print(f"      • {desc}")
             
             # 可选：保存调试图像
             patch_config = cfg.get("patch_config", {})
@@ -125,12 +134,14 @@ def run_pipeline(cfg: dict, test_image_path: str):
             prompt_start = time.time()
             prompt = generator.build_prompt(retrieved_data)
             prompt_time = time.time() - prompt_start
+            _print_model_prompt(prompt)
             
             gen_start = time.time()
-            caption = generator.generate_caption(prompt, debug=True)
+            caption = generator.generate_caption(prompt, debug=verbose)
             gen_time = time.time() - gen_start
             
-            print(f"\nTiming: Prompt building: {prompt_time:.2f}s, Generation: {gen_time:.2f}s")
+            if verbose:
+                print(f"\nTiming: Prompt building: {prompt_time:.2f}s, Generation: {gen_time:.2f}s")
             
             # 使用全局描述作为fallback数据源
             retrieved_for_fallback = global_descriptions
@@ -141,10 +152,12 @@ def run_pipeline(cfg: dict, test_image_path: str):
             retrieved_for_fallback = retriever.get_retrieved_captions(img)
             retrieved_data = {"global_descriptions": retrieved_for_fallback, "local_regions": []}
             prompt = generator.build_prompt(retrieved_data)
-            caption = generator.generate_caption(prompt, debug=True)
+            _print_model_prompt(prompt)
+            caption = generator.generate_caption(prompt, debug=verbose)
     else:
         # 传统全局检索流程
-        print("Using global retrieval mode...")
+        if verbose:
+            print("Using global retrieval mode...")
         retrieval_start = time.time()
         retrieved_for_fallback = retriever.get_retrieved_captions(img)
         retrieval_time = time.time() - retrieval_start
@@ -153,17 +166,19 @@ def run_pipeline(cfg: dict, test_image_path: str):
             print("No similar images found or knowledge base is empty.")
             return
 
-        # show retrieved summaries
-        print("Retrieved images and their captions:")
-        for item in retrieved_for_fallback:
-            print(f"- Image ID: {item.get('image_id')}  Score: {item.get('score'):.4f}")
-            for c in item.get('captions', []):
-                print(f"    • {c}")
+        if verbose:
+            # show retrieved summaries
+            print("Retrieved images and their captions:")
+            for item in retrieved_for_fallback:
+                print(f"- Image ID: {item.get('image_id')}  Score: {item.get('score'):.4f}")
+                for c in item.get('captions', []):
+                    print(f"    • {c}")
 
         # build prompt and generate
         prompt = generator.build_prompt(retrieved_for_fallback)
-        # debug=True to print prompt and tokenization to help diagnose generation issues
-        caption = generator.generate_caption(prompt, debug=True)
+        _print_model_prompt(prompt)
+        # debug flag follows verbosity
+        caption = generator.generate_caption(prompt, debug=verbose)
 
     # basic validity check for generated caption
     def _is_valid(s: str) -> bool:
@@ -205,9 +220,12 @@ def run_pipeline(cfg: dict, test_image_path: str):
                 caption = ";".join(parts)
 
     total_time = time.time() - start_time
-    print("\nGenerated caption:")
-    print(caption)
-    print(f"\nTotal pipeline time: {total_time:.2f}s")
+    if verbose:
+        print("\nGenerated caption:")
+        print(caption)
+        print(f"\nTotal pipeline time: {total_time:.2f}s")
+    else:
+        print(caption)
 
 
 def main():

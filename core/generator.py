@@ -33,11 +33,10 @@ class CaptionGenerator:
         "{global_descriptions}\n\n"
         "The entities and their quantities in the image A are:\n"
         "{local_descriptions}\n\n"
-        # "The description of the entities in Image A (for reference only):\n"
-        # "{local_entry_desc}\n\n"
+
 
         "Please describe the content of image A based on the description of similar image B and the entity: quantity information existing in image A (requcirement: only one sentence is allowed for the description, only one sentence is allowed for the description)).\n"
-        "Please return the description of this image A:\n"
+        "Please return the description of this image A(Describe it in one sentence.):\n"
     )
 
     def __init__(self, config: Union[dict, str]):
@@ -334,11 +333,7 @@ class CaptionGenerator:
                 # show tokenized input (decoded back) and token ids
                 tmp = self.tokenizer(prompt, return_tensors="pt", truncation=True)
                 ids = tmp.get("input_ids")
-                if ids is not None:
-                    print("\n--- token ids ---")
-                    print(ids[0].tolist()[:200])
-                    print("--- decoded tokens (first 200 tokens) ---")
-                    print(self.tokenizer.decode(ids[0][:200], skip_special_tokens=False))
+
             except Exception as e:
                 print(f"Failed to show tokenized prompt: {e}")
 
@@ -404,21 +399,14 @@ class CaptionGenerator:
                     attention_mask=chat_inputs.get("attention_mask"),
                     **gen_kwargs,
                 )
-            return self.tokenizer.decode(output[0], skip_special_tokens=True)
+            generated_sequence = output[0]
+            if generated_sequence.shape[0] > prompt_len:
+                generated_sequence = generated_sequence[prompt_len:]
+            return self.tokenizer.decode(generated_sequence, skip_special_tokens=True)
 
         decoded = _run_generation(prompt)
         cleaned = self._clean_output(decoded)
 
-        # if debug:
-        #     try:
-        #         print("\n--- raw generated token ids ---")
-        #         print(out[0].tolist()[:200])
-        #         print("--- raw decoded (skip_special_tokens=False) ---")
-        #         print(self.tokenizer.decode(out[0], skip_special_tokens=False))
-        #     except Exception as e:
-        #         print(f"Failed to print generated ids: {e}")
-
-        # if output is clearly invalid or too short, retry with stronger beams and English prompt
         if not self._is_valid_caption(cleaned) or len(cleaned) <= 4:
             # retry 1: increase beams and min length
             try:
