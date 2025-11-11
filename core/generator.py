@@ -27,16 +27,22 @@ class CaptionGenerator:
     )
     
     PROMPT_TEMPLATE_PATCH = (
-        "You are an expert in describing image content.Here is a brand-new image A. You need to describe it in one sentence. Below are some descriptions of image B which is similar to A, as well as the information about the entities existing in image A and the quantity of each entity:\n\n"
-        
-       "Descriptions of similar image B:  \n"
+       "Generate a SHORT image caption in EXACTLY one sentence. STRICTLY limit to 8-10 words.\n\n"
+    
+        "Similar images context:\n"
         "{global_descriptions}\n\n"
-        "The entities and their quantities in the image A are:\n"
+        
+        "Key objects detected:\n"
         "{local_descriptions}\n\n"
-
-
-        "Please describe the content of image A based on the description of similar image B and the entity: quantity information existing in image A (requcirement:only one sentence is allowed for the description)).\n"
-        "Please return the description of this image A(Describe the content of the image without including information such as Image A or Image B. Keep the translation natural and fluent, and follow English expression habits.):\n"
+        
+        "IMPORTANT INSTRUCTIONS:\n"
+        "- Output ONLY the caption, nothing else\n"
+        "- Use simple, concise language\n"
+        "- Focus on the main subjects and actions\n"
+        "- MAXIMUM 10 words\n"
+        "- Do not include any explanations\n\n"
+        
+        "Caption:"
     )
 
     def __init__(self, config: Union[dict, str]):
@@ -192,9 +198,14 @@ class CaptionGenerator:
                 continue
             # 只输出类别及实例数量，例如 "bird:3"
             # count = len(descs)
-            count = sum(1 for region in local_regions if region['class_label'] == class_label)
-            local_sections.append(f"{class_label}:{count}")
+            # count = sum(1 for region in local_regions if region['class_label'] == class_label)
+            # local_sections.append(f"{class_label}:{count}")
 
+            # 生成结构化分组块
+            section_lines = [f"OBJECT TYPE: {class_label}"]
+            for i, d in enumerate(descs, start=1):
+                section_lines.append(f"- Instance {i}: {d}")
+            local_sections.append("\n".join(section_lines))
         # 使用单行换行连接每个类别:数量，示例："bird:3\ndog:2"
         local_block = "\n".join(local_sections) if local_sections else "None"
         
@@ -296,10 +307,38 @@ class CaptionGenerator:
         ordered_grouped = {k: grouped[k] for k in class_order}
         return ordered_grouped
 
+    def _extract_caption_segment(self, text: str) -> str:
+        """Extract the portion of the model output that follows the caption marker."""
+        if not isinstance(text, str):
+            text = str(text)
+
+        markers = ["Caption:", "caption:", "说明:", "回答:", "答复:", "caption：", "Caption："]
+        for marker in markers:
+            idx = text.rfind(marker)
+            if idx != -1:
+                text = text[idx + len(marker) :]
+                break
+
+        # remove assistant or other speaker prefixes
+        text = re.sub(r"^(?:\s*(Assistant|assistant|助手)[：:]\s*)", "", text)
+
+        # truncate when another speaker prompt appears again
+        stop_markers = ["\nHuman:", "\nUser:", "\nAssistant:", "\nSystem:", " Human:", " User:", " Assistant:", " System:"]
+        for marker in stop_markers:
+            idx = text.find(marker)
+            if idx != -1 and idx > 0:
+                text = text[:idx]
+                break
+
+        # strip stray quotes
+        text = text.strip().strip('"').strip()
+        return text
+
     def _clean_output(self, text: str) -> str:
         """Basic cleaning: remove repeated whitespace, strip special tokens, ensure ending punctuation."""
         if not isinstance(text, str):
             text = str(text)
+        text = self._extract_caption_segment(text)
         # remove tokenizer artifacts like <pad> etc if present
         text = re.sub(r"<[^>]+>", "", text)
         # collapse whitespace

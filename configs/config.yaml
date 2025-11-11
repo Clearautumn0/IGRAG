@@ -38,3 +38,16 @@ patch_config:
 
   # 调试选项
   save_debug_patches: true  # 是否保存检测到的区域图像用于调试
+
+evaluation:
+  val_images_dir: "/home/m025/qqw/coco/val2017/"
+  val_annotations_path: "/home/m025/qqw/coco/annotations/captions_val2017.json"
+  subset_size: null
+  output_dir: "./evaluation_results/"
+  save_individual_results: true
+
+metrics:
+  bleu: true
+  rouge: true
+  cider: true
+  spice: true
