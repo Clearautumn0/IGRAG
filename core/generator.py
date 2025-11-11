@@ -27,20 +27,19 @@ class CaptionGenerator:
     )
     
     PROMPT_TEMPLATE_PATCH = (
-       "Generate a SHORT image caption in EXACTLY one sentence. STRICTLY limit to 8-10 words.\n\n"
-    
-        "Similar images context:\n"
+        "Generate a concise image caption in COCO dataset style.\n"
+        "Requirements:\n"
+        "- One sentence only\n" 
+        "- 8-12 words maximum\n"
+        "- Describe only what is visually apparent\n"
+        "- Use simple, factual language\n"
+        "- Avoid inferences or background information\n\n"
+        
+        "Similar images show:\n"
         "{global_descriptions}\n\n"
         
-        "Key objects detected:\n"
+        "Detected objects:\n"
         "{local_descriptions}\n\n"
-        
-        "IMPORTANT INSTRUCTIONS:\n"
-        "- Output ONLY the caption, nothing else\n"
-        "- Use simple, concise language\n"
-        "- Focus on the main subjects and actions\n"
-        "- MAXIMUM 10 words\n"
-        "- Do not include any explanations\n\n"
         
         "Caption:"
     )
@@ -66,7 +65,7 @@ class CaptionGenerator:
         self.num_beams = int(gen_cfg.get("num_beams", 3))
         # additional generation knobs
         self.min_length = int(gen_cfg.get("min_length", 10))
-        self.repetition_penalty = float(gen_cfg.get("repetition_penalty", 1.2))
+        self.repetition_penalty = float(gen_cfg.get("repetition_penalty", 1.3))
         self.temperature = float(gen_cfg.get("temperature", 0.7))
         self.top_p = float(gen_cfg.get("top_p", 0.9))
         
@@ -417,12 +416,13 @@ class CaptionGenerator:
                 num_beams=self.num_beams,
                 early_stopping=True,
                 no_repeat_ngram_size=3,
-                length_penalty=1.0,
+                length_penalty=1.5,
                 repetition_penalty=self.repetition_penalty,
                 temperature=self.temperature,
                 top_p=self.top_p,
                 eos_token_id=eos_token_id,
                 pad_token_id=pad_token_id,
+                do_sample=True,
             )
             if override_kwargs:
                 overrides = dict(override_kwargs)

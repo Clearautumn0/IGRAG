@@ -12,8 +12,8 @@ retrieval_config:
   use_patch_retrieval: true  # 启用分块检索功能
 
 generation_config:
-  max_length: 100
-  num_beams: 3
+  max_length: 20
+  num_beams: 2
 
 runtime_config:
   # 'deploy' -> on generation failure, use fallback composed from retrieved captions
@@ -50,4 +50,4 @@ metrics:
   bleu: true
   rouge: true
   cider: true
-  spice: true
+  spice: false

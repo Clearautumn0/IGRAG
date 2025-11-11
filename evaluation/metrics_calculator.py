@@ -1,114 +1,150 @@
-"""Metric calculation helpers for caption evaluation."""
+"""COCO-style captioning metrics calculator."""
 
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
-from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
-from rouge_score import rouge_scorer
-
-try:
-    from pycocoevalcap.cider.cider import Cider
-except ImportError:  # pragma: no cover - dependency missing at runtime
-    Cider = None  # type: ignore
-
-try:
-    from pycocoevalcap.spice.spice import Spice
-except ImportError:  # pragma: no cover - dependency missing at runtime
-    Spice = None  # type: ignore
+from pycocotools.coco import COCO
+from pycocoevalcap.tokenizer.ptbtokenizer import PTBTokenizer
+from pycocoevalcap.bleu.bleu import Bleu
+from pycocoevalcap.rouge.rouge import Rouge
+from pycocoevalcap.cider.cider import Cider
+from pycocoevalcap.spice.spice import Spice
 
 
 class MetricsCalculator:
-    """Compute a collection of captioning metrics for a single prediction."""
+    """Wrapper around COCOEvalCap for computing captioning metrics."""
 
-    def __init__(self) -> None:
-        self._bleu_weights = (0.25, 0.25, 0.25, 0.25)
-        self._smoothing = SmoothingFunction().method1
-        self._rouge_scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+    _METRIC_KEY_MAP: Dict[str, str] = {
+        "Bleu_4": "BLEU-4",
+        "ROUGE_L": "ROUGE-L",
+        "CIDEr": "CIDEr",
+        "SPICE": "SPICE",
+    }
 
-        self._cider_scorer = Cider() if Cider is not None else None
-        if Cider is None:
-            logging.warning("CIDEr scorer not available. Install pycocoevalcap to enable CIDEr.")
+    _CONFIG_MAP: Dict[str, str] = {
+        "bleu": "BLEU-4",
+        "rouge": "ROUGE-L",
+        "cider": "CIDEr",
+        "spice": "SPICE",
+    }
 
-        self._spice_scorer = Spice() if Spice is not None else None
-        if Spice is None:
-            logging.warning("SPICE scorer not available. Install pycocoevalcap to enable SPICE.")
+    def __init__(self, annotations_path: Union[str, Path], metrics_config: Optional[Dict[str, bool]] = None) -> None:
+        self.annotations_path = Path(annotations_path)
+        if not self.annotations_path.exists():
+            raise FileNotFoundError(f"Annotations file not found: {self.annotations_path}")
 
-    def calculate_all_metrics(self, generated_caption: str, reference_captions: List[str]) -> Dict[str, Optional[float]]:
-        """Compute BLEU-4, ROUGE-L, CIDEr-D, and SPICE scores."""
-        references = [r.strip() for r in reference_captions if r and r.strip()]
-        generated = generated_caption.strip()
+        self.coco = COCO(str(self.annotations_path))
+        self.enabled_metrics = self._resolve_enabled_metrics(metrics_config)
 
-        if not references:
-            logging.warning("No reference captions provided; metrics will be None.")
-            return {"BLEU-4": None, "ROUGE-L": None, "CIDEr": None, "SPICE": None}
+    def _resolve_enabled_metrics(self, metrics_config: Optional[Dict[str, bool]]) -> List[str]:
+        if not metrics_config:
+            return list(self._METRIC_KEY_MAP.values())
+        enabled = []
+        for key, friendly in self._CONFIG_MAP.items():
+            flag = metrics_config.get(key, True)
+            if flag:
+                enabled.append(friendly)
+        if not enabled:
+            logging.warning("No metrics enabled; defaulting to BLEU-4.")
+            enabled = ["BLEU-4"]
+        return enabled
 
-        scores: Dict[str, Optional[float]] = {
-            "BLEU-4": self._calculate_bleu(generated, references),
-            "ROUGE-L": self._calculate_rouge(generated, references),
-            "CIDEr": self._calculate_cider(generated, references),
-            "SPICE": self._calculate_spice(generated, references),
-        }
-        return scores
+    def evaluate(self, predictions: Sequence[Dict[str, Union[int, str]]]) -> Dict[str, Dict]:
+        """Evaluate predictions against COCO references using official metrics.
 
-    def _tokenize(self, text: str) -> List[str]:
-        return text.split()
+        Args:
+            predictions: iterable of {"image_id": int, "caption": str}
+        """
+        predictions = list(predictions)
+        if not predictions:
+            logging.warning("No predictions provided; skipping metric evaluation.")
+            return {"aggregate": {}, "per_image": {}, "enabled_metrics": self.enabled_metrics}
 
-    def _calculate_bleu(self, generated: str, references: List[str]) -> Optional[float]:
-        try:
-            hypothesis_tokens = self._tokenize(generated)
-            reference_tokens = [self._tokenize(ref) for ref in references]
-            if not hypothesis_tokens or not any(reference_tokens):
-                return 0.0
-            score = sentence_bleu(
-                reference_tokens,
-                hypothesis_tokens,
-                weights=self._bleu_weights,
-                smoothing_function=self._smoothing,
-            )
-            return float(score)
-        except Exception as exc:  # pragma: no cover - defensive
-            logging.error("BLEU calculation failed: %s", exc)
-            return None
+        formatted_predictions = self._format_predictions(predictions)
+        valid_predictions = []
+        for item in formatted_predictions:
+            image_id = int(item["image_id"])
+            anns = self.coco.imgToAnns.get(image_id, [])
+            if not anns:
+                logging.warning("Skipping image %s due to missing ground-truth captions.", image_id)
+                continue
+            valid_predictions.append(item)
 
-    def _calculate_rouge(self, generated: str, references: List[str]) -> Optional[float]:
-        try:
-            scores = [
-                self._rouge_scorer.score(ref, generated)["rougeL"].fmeasure
-                for ref in references
-            ]
-            if not scores:
-                return 0.0
-            return float(sum(scores) / len(scores))
-        except Exception as exc:  # pragma: no cover - defensive
-            logging.error("ROUGE-L calculation failed: %s", exc)
-            return None
+        if not valid_predictions:
+            logging.warning("No valid predictions overlap with COCO annotations; cannot compute metrics.")
+            return {"aggregate": {}, "per_image": {}, "enabled_metrics": self.enabled_metrics}
 
-    def _prepare_coco_format(self, generated: str, references: List[str]):
-        res = {0: [generated]}
-        gts = {0: references}
-        return gts, res
+        coco_results = self.coco.loadRes(valid_predictions)
+        img_ids = coco_results.getImgIds()
 
-    def _calculate_cider(self, generated: str, references: List[str]) -> Optional[float]:
-        if self._cider_scorer is None:
-            return None
-        try:
-            gts, res = self._prepare_coco_format(generated, references)
-            score, _ = self._cider_scorer.compute_score(gts, res)
-            return float(score)
-        except Exception as exc:  # pragma: no cover - external dependency
-            logging.error("CIDEr calculation failed: %s", exc)
-            return None
+        gts = {img_id: self.coco.imgToAnns[img_id] for img_id in img_ids}
+        res = {img_id: coco_results.imgToAnns[img_id] for img_id in img_ids}
 
-    def _calculate_spice(self, generated: str, references: List[str]) -> Optional[float]:
-        if self._spice_scorer is None:
-            return None
-        try:
-            gts, res = self._prepare_coco_format(generated, references)
-            score, _ = self._spice_scorer.compute_score(gts, res)
-            return float(score)
-        except Exception as exc:  # pragma: no cover - external dependency
-            logging.error("SPICE calculation failed: %s", exc)
-            return None
+        tokenizer = PTBTokenizer()
+        gts = tokenizer.tokenize(gts)
+        res = tokenizer.tokenize(res)
+
+        aggregate: Dict[str, float] = {}
+        per_image: Dict[str, Dict[str, float]] = {str(img_id): {} for img_id in img_ids}
+        active_metrics: List[str] = []
+
+        def _store(metric_name: str, overall: float, scores: Sequence[float]) -> None:
+            aggregate[metric_name] = float(overall)
+            for img_id, score in zip(img_ids, scores):
+                per_image[str(img_id)][metric_name] = float(score)
+            active_metrics.append(metric_name)
+
+        if "BLEU-4" in self.enabled_metrics:
+            try:
+                scorer = Bleu(4)
+                score, scores = scorer.compute_score(gts, res)
+                _store("BLEU-4", score[3], scores[3])
+            except Exception as exc:
+                logging.warning("BLEU computation failed: %s", exc)
+
+        if "ROUGE-L" in self.enabled_metrics:
+            try:
+                scorer = Rouge()
+                score, scores = scorer.compute_score(gts, res)
+                _store("ROUGE-L", score, scores)
+            except Exception as exc:
+                logging.warning("ROUGE-L computation failed: %s", exc)
+
+        if "CIDEr" in self.enabled_metrics:
+            try:
+                scorer = Cider()
+                score, scores = scorer.compute_score(gts, res)
+                _store("CIDEr", score, scores)
+            except Exception as exc:
+                logging.warning("CIDEr computation failed: %s", exc)
+
+        if "SPICE" in self.enabled_metrics:
+            try:
+                scorer = Spice()
+                score, scores = scorer.compute_score(gts, res)
+                # SPICE returns tuple(score, scores) where scores is list of dicts; extract "All"
+                overall = score
+                per_scores = [item.get("All", 0.0) if isinstance(item, dict) else item for item in scores]
+                _store("SPICE", overall, per_scores)
+            except Exception as exc:
+                logging.warning("SPICE computation failed: %s", exc)
+
+        return {"aggregate": aggregate, "per_image": per_image, "enabled_metrics": active_metrics}
+
+    def _format_predictions(self, predictions: Iterable[Dict[str, Union[int, str]]]) -> List[Dict[str, Union[int, str]]]:
+        seen = set()
+        formatted = []
+        for item in predictions:
+            image_id = int(item["image_id"])
+            if image_id in seen:
+                continue
+            caption = str(item.get("caption", "")).strip()
+            formatted.append({"image_id": image_id, "caption": caption})
+            seen.add(image_id)
+        return formatted
+
+    # _extract_* helpers removed since metrics are computed inline.
 

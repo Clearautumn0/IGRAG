@@ -43,8 +43,6 @@ class IGRAGEvaluator:
         self.config = deepcopy(config)
         self.retriever = retriever
         self.generator = generator
-        self.metrics = MetricsCalculator()
-
         evaluation_cfg = self.config.get("evaluation", {})
         self.val_images_dir = Path(evaluation_cfg.get("val_images_dir", ""))
         self.annotations_path = evaluation_cfg.get("val_annotations_path")
@@ -64,6 +62,7 @@ class IGRAGEvaluator:
         gt_data = self._load_ground_truth(self.annotations_path)
         self.references = gt_data["references"]
         self.image_id_to_file = gt_data["file_map"]
+        self.metrics = MetricsCalculator(self.annotations_path, self.config.get("metrics"))
 
     def _load_ground_truth(self, annotations_path: Union[str, Path]) -> Dict[str, Dict]:
         """Load COCO-style annotations into memory."""
@@ -91,14 +90,12 @@ class IGRAGEvaluator:
         caption_result = image_meta["caption_result"]
         caption = caption_result.caption
 
-        metrics = self.metrics.calculate_all_metrics(caption, references)
-
         sample = EvaluationSample(
             image_id=image_id,
             file_name=self.image_id_to_file.get(image_id, Path(image_path).name if isinstance(image_path, (str, Path)) else str(image_id)),
             generated_caption=caption,
             references=references,
-            metrics=metrics,
+            metrics={},
             metadata={
                 "pipeline": caption_result.metadata,
                 "status": image_meta["status"],
@@ -270,27 +267,35 @@ class IGRAGEvaluator:
                     continue
                 image_path = self.val_images_dir / file_name
                 sample = self.evaluate_single_image(image_path, image_id)
-                results[str(image_id)] = self._sample_to_dict(sample)
+                result_entry = self._sample_to_dict(sample)
+                results[str(image_id)] = result_entry
             except Exception as exc:
                 logging.error("Failed to evaluate image %s: %s", image_id, exc)
                 results[str(image_id)] = {
                     "image_id": image_id,
                     "file_name": self.image_id_to_file.get(image_id, ""),
                     "generated_caption": "",
+                    "coco_captions": self.references.get(image_id, []),
                     "references": self.references.get(image_id, []),
-                    "metrics": {
-                        "BLEU-4": None,
-                        "ROUGE-L": None,
-                        "CIDEr": None,
-                        "SPICE": None,
-                    },
+                    "metrics": {},
                     "metadata": {"status": "error", "error": str(exc)},
                 }
 
             if self.save_individual:
                 self._write_partial_results(output_path, results)
 
-        summary = self._aggregate_results(results)
+        predictions: List[Dict[str, Union[int, str]]] = []
+        for image_id in image_ids:
+            entry = results.get(str(image_id))
+            if not entry:
+                continue
+            caption = entry.get("generated_caption", "")
+            predictions.append({"image_id": int(image_id), "caption": caption})
+
+        metrics_result = self.metrics.evaluate(predictions)
+        self._merge_metrics(results, metrics_result)
+
+        summary = self._aggregate_results(results, metrics_result)
         payload = {
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "config": {
@@ -310,6 +315,7 @@ class IGRAGEvaluator:
             "image_id": sample.image_id,
             "file_name": sample.file_name,
             "generated_caption": sample.generated_caption,
+            "coco_captions": sample.references,
             "references": sample.references,
             "metrics": sample.metrics,
             "metadata": sample.metadata,
@@ -337,9 +343,25 @@ class IGRAGEvaluator:
             json.dump(payload, f, ensure_ascii=False, indent=2)
         tmp_path.replace(path)
 
-    def _aggregate_results(self, results: Dict[str, Dict]) -> Dict:
-        metrics_keys = ["BLEU-4", "ROUGE-L", "CIDEr", "SPICE"]
-        metrics_arrays: Dict[str, List[float]] = {k: [] for k in metrics_keys}
+    def _merge_metrics(self, results: Dict[str, Dict], metrics_result: Dict[str, Dict]) -> None:
+        per_image_metrics = metrics_result.get("per_image", {})
+        enabled_metrics = metrics_result.get("enabled_metrics", [])
+
+        for image_id_str, entry in results.items():
+            image_metrics = per_image_metrics.get(image_id_str, {})
+            entry.setdefault("metrics", {})
+            for metric_name in enabled_metrics:
+                value = image_metrics.get(metric_name)
+                if isinstance(value, (int, float)):
+                    entry["metrics"][metric_name] = float(value)
+                else:
+                    entry["metrics"][metric_name] = None
+
+    def _aggregate_results(self, results: Dict[str, Dict], metrics_result: Dict[str, Dict]) -> Dict:
+        enabled_metrics = metrics_result.get("enabled_metrics", [])
+        aggregate_official = metrics_result.get("aggregate", {})
+
+        metrics_arrays: Dict[str, List[float]] = {k: [] for k in enabled_metrics}
         failures = 0
 
         for item in results.values():
@@ -348,23 +370,31 @@ class IGRAGEvaluator:
             if status != "success":
                 failures += 1
             metrics = item.get("metrics", {})
-            for key in metrics_keys:
+            for key in enabled_metrics:
                 val = metrics.get(key)
                 if isinstance(val, (int, float)):
                     metrics_arrays[key].append(float(val))
 
         summary_metrics = {}
-        for key, values in metrics_arrays.items():
-            if not values:
-                summary_metrics[key] = {"mean": None, "median": None, "p25": None, "p75": None}
-                continue
-            arr = np.array(values)
-            summary_metrics[key] = {
-                "mean": float(arr.mean()),
-                "median": float(np.median(arr)),
-                "p25": float(np.percentile(arr, 25)),
-                "p75": float(np.percentile(arr, 75)),
-            }
+        for key in enabled_metrics:
+            values = metrics_arrays.get(key, [])
+            if values:
+                arr = np.array(values)
+                summary_metrics[key] = {
+                    "official": aggregate_official.get(key),
+                    "mean": float(arr.mean()),
+                    "median": float(np.median(arr)),
+                    "p25": float(np.percentile(arr, 25)),
+                    "p75": float(np.percentile(arr, 75)),
+                }
+            else:
+                summary_metrics[key] = {
+                    "official": aggregate_official.get(key),
+                    "mean": None,
+                    "median": None,
+                    "p25": None,
+                    "p75": None,
+                }
 
         return {
             "num_images": len(results),

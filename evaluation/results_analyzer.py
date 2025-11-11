@@ -39,13 +39,18 @@ class ResultsAnalyzer:
         lines.append("Aggregate metrics:")
 
         for name, stats in metrics.items():
+            official = stats.get("official")
             mean_val = stats.get("mean")
             median = stats.get("median")
             p25 = stats.get("p25")
             p75 = stats.get("p75")
+
+            def _fmt(value: Optional[float]) -> str:
+                return f"{value:.4f}" if isinstance(value, (int, float)) else "N/A"
+
             lines.append(
-                f"- {name}: mean={mean_val:.4f} median={median:.4f} "
-                f"[p25={p25:.4f}, p75={p75:.4f}]"
+                f"- {name}: official={_fmt(official)} mean={_fmt(mean_val)} "
+                f"median={_fmt(median)} [p25={_fmt(p25)}, p75={_fmt(p75)}]"
             )
 
         low_samples, high_samples = self._identify_extremes(per_image, top_k)
@@ -85,8 +90,10 @@ class ResultsAnalyzer:
         caption = data.get("generated_caption", "")
         metrics = data.get("metrics", {})
         status = data.get("metadata", {}).get("status", "unknown")
-        metric_str = ", ".join(
-            f"{k}={v:.4f}" for k, v in metrics.items() if isinstance(v, (int, float))
-        )
+        metric_items = []
+        for k, v in metrics.items():
+            if isinstance(v, (int, float)):
+                metric_items.append(f"{k}={v:.4f}")
+        metric_str = ", ".join(metric_items) if metric_items else "no metrics"
         return f"[{image_id}] status={status} caption='{caption}' ({metric_str})"
 
