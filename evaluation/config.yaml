@@ -1,0 +1,33 @@
+# 评估模块独立配置文件
+# 此配置文件仅用于评估模块，与主项目配置分离
+
+# COCO验证集路径
+data:
+  val_images_dir: "/home/m025/qqw/coco/val2017/"
+  val_annotations_path: "/home/m025/qqw/coco/annotations/captions_val2017.json"
+
+# 评估输出配置
+output:
+  output_dir: "./evaluation_results/"
+  # 结果文件名，如果为None则自动生成时间戳文件名
+  output_file: null
+
+# IGRAG模型配置（用于生成caption）
+# 这些配置会传递给IGRAG的主配置
+igrag:
+  # 主配置文件路径（用于加载IGRAG的retriever和generator）
+  main_config_path: "configs/config.yaml"
+  # 检索模式: "global_only" 或 "global_local"
+  retrieval_mode: "global_local"
+
+# 评估指标配置
+metrics:
+  # 是否计算各项指标
+  bleu_1: true
+  bleu_2: true
+  bleu_4: true
+  meteor: true
+  rouge: true
+  cider: true
+  spice: true
+

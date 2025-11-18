@@ -1,135 +1,106 @@
 #!/usr/bin/env python3
-"""CLI entrypoint for running IGRAG caption evaluation."""
+"""评估模块命令行入口"""
 
 from __future__ import annotations
 
 import argparse
 import logging
-from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
 
-from core.generator import CaptionGenerator
-from core.retriever import ImageRetriever
-from evaluation.evaluator import IGRAGEvaluator
-from evaluation.results_analyzer import ResultsAnalyzer
-from main import load_config, setup_logging
-
-try:
-    import matplotlib.pyplot as plt
-except ImportError:  # pragma: no cover - optional dependency
-    plt = None  # type: ignore
+from evaluation.evaluator import SimpleEvaluator
+from main import setup_logging
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run IGRAG caption evaluation on COCO validation set.")
-    parser.add_argument("--config", type=str, default="configs/config.yaml", help="Path to configuration file.")
-    parser.add_argument("--subset", type=int, default=None, help="Number of validation images to evaluate.")
-    parser.add_argument("--output", type=str, default=None, help="Path to write JSON evaluation results.")
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(
+        description="运行IGRAG caption评估",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  # 评估前100张图片
+  python evaluation/run_evaluation.py --subset 100
+  
+  # 使用自定义评估配置文件
+  python evaluation/run_evaluation.py --config evaluation/config.yaml --subset 50
+  
+  # 评估所有图片
+  python evaluation/run_evaluation.py
+        """
+    )
     parser.add_argument(
-        "--mode",
+        "--config",
         type=str,
-        choices=["global_only", "global_local"],
+        default="evaluation/config.yaml",
+        help="评估模块配置文件路径（默认: evaluation/config.yaml）"
+    )
+    parser.add_argument(
+        "--subset",
+        type=int,
         default=None,
-        help="Evaluation retrieval mode override.",
+        help="评估子集大小（只评估前N张图片，用于快速测试）"
     )
     return parser.parse_args()
 
 
-def adjust_config(config: dict, args: argparse.Namespace) -> None:
-    evaluation_cfg = config.setdefault("evaluation", {})
-    if args.subset is not None:
-        evaluation_cfg["subset_size"] = args.subset
-
-    retrieval_cfg = config.setdefault("retrieval_config", {})
-    if args.mode == "global_only":
-        retrieval_cfg["use_patch_retrieval"] = False
-    elif args.mode == "global_local":
-        retrieval_cfg["use_patch_retrieval"] = True
-
-
-def resolve_output_path(config: dict, output_arg: Optional[str]) -> Path:
-    evaluation_cfg = config.get("evaluation", {})
-    base_dir = Path(evaluation_cfg.get("output_dir", "./evaluation_results"))
-    base_dir.mkdir(parents=True, exist_ok=True)
-
-    if output_arg:
-        return Path(output_arg)
-
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    return base_dir / f"evaluation_{timestamp}.json"
-
-
-def select_image_ids(evaluator: IGRAGEvaluator, subset: Optional[int]) -> List[int]:
-    image_ids = sorted(int(image_id) for image_id in evaluator.image_id_to_file.keys())
-    if subset is not None:
-        return image_ids[:subset]
-    return image_ids
-
-
-def save_visualizations(results_path: Path, results: dict) -> None:
-    if plt is None:
-        logging.info("matplotlib not available; skipping visualization export.")
-        return
-
-    metrics = results.get("per_image", {})
-    keys = ["BLEU-4", "ROUGE-L", "CIDEr", "SPICE"]
-    data = {k: [] for k in keys}
-    for entry in metrics.values():
-        metric = entry.get("metrics", {})
-        for k in keys:
-            val = metric.get(k)
-            if isinstance(val, (int, float)):
-                data[k].append(float(val))
-
-    plt.figure(figsize=(12, 8))
-    for idx, key in enumerate(keys, start=1):
-        values = data[key]
-        plt.subplot(2, 2, idx)
-        if values:
-            plt.hist(values, bins=30, alpha=0.7, color="steelblue")
-            plt.title(f"{key} distribution")
-            plt.xlabel("Score")
-            plt.ylabel("Frequency")
-        else:
-            plt.text(0.5, 0.5, "No data", ha="center", va="center")
-            plt.title(f"{key} distribution")
-            plt.axis("off")
-
-    plt.tight_layout()
-    figure_path = results_path.with_suffix(".png")
-    plt.savefig(figure_path)
-    plt.close()
-    logging.info("Saved metric histograms to %s", figure_path)
-
-
 def main() -> None:
+    """主函数"""
     args = parse_args()
-    config = load_config(args.config)
-    adjust_config(config, args)
-    setup_logging(config)
-
-    retriever = ImageRetriever(config)
-    generator = CaptionGenerator(config)
-    evaluator = IGRAGEvaluator(config, retriever, generator)
-
-    subset_size = config.get("evaluation", {}).get("subset_size")
-    image_ids = select_image_ids(evaluator, subset_size)
-    if not image_ids:
-        logging.error("No validation images available for evaluation.")
+    
+    # 加载评估配置
+    eval_config_path = Path(args.config)
+    if not eval_config_path.exists():
+        logging.error(f"评估配置文件不存在: {eval_config_path}")
         return
-
-    output_path = resolve_output_path(config, args.output)
-    results = evaluator.evaluate_dataset(image_ids, output_path)
-
-    analyzer = ResultsAnalyzer()
-    analyzer.load_results(output_path)
-    report = analyzer.generate_report()
-    print(report)
-
-    save_visualizations(output_path, results)
+    
+    # 初始化评估器
+    try:
+        evaluator = SimpleEvaluator(eval_config_path)
+    except Exception as e:
+        logging.error(f"初始化评估器失败: {e}")
+        return
+    
+    # 获取所有图片ID
+    image_ids = sorted(evaluator.image_id_to_file.keys())
+    
+    if not image_ids:
+        logging.error("没有可评估的图片")
+        return
+    
+    # 显示评估信息
+    subset_size = args.subset
+    if subset_size is not None:
+        logging.info(f"将评估前 {subset_size} 张图片（共 {len(image_ids)} 张）")
+    else:
+        logging.info(f"将评估所有 {len(image_ids)} 张图片")
+    
+    # 运行评估
+    try:
+        results = evaluator.evaluate_dataset(image_ids, subset_size=subset_size)
+        
+        # 打印汇总信息
+        if results:
+            print("\n" + "=" * 60)
+            print("评估完成")
+            print("=" * 60)
+            print(f"评估图片数: {results.get('num_images', 0)}")
+            
+            aggregate_metrics = results.get("aggregate_metrics", {})
+            if aggregate_metrics:
+                print("\n总体指标:")
+                for metric_name, score in aggregate_metrics.items():
+                    print(f"  {metric_name}: {score:.4f}")
+            
+            print("=" * 60)
+    except Exception as e:
+        logging.error(f"评估过程出错: {e}", exc_info=True)
 
 
 if __name__ == "__main__":
+    # 设置基本日志
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
     main()
-

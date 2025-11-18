@@ -1,19 +1,14 @@
-# IGRAG 评估使用说明
+# IGRAG 评估模块使用说明
 
-本说明文档介绍如何使用 `evaluation/` 目录下的脚本与模块，对 IGRAG 图像描述系统在 COCO 验证集上进行性能评估。
+本评估模块已重构为独立、简化的版本，使用 `pycocoevalcap` 计算标准评估指标。
 
 ## 1. 环境准备
 
-在项目根目录执行以下命令安装评估所需依赖（建议使用虚拟环境）：
+安装评估所需依赖：
 
 ```bash
-pip install pycocotools nltk rouge-score tqdm matplotlib
+pip install pycocotools pycocoevalcap nltk
 ```
-
-> **提示**  
-> - `pycocotools` 与 `rouge-score` 用于计算 CIDEr-D、ROUGE-L 等指标。  
-> - `matplotlib` 用于生成指标分布图，可选装。  
-> - SPICE 依赖 Java 运行环境，请确保系统已安装 Java（例如 OpenJDK）。
 
 首次使用 NLTK 可能需要下载额外数据集：
 
@@ -22,102 +17,143 @@ import nltk
 nltk.download("punkt")
 ```
 
+注意：SPICE 指标需要 Java 运行环境，请确保系统已安装 Java。
+
 ## 2. 目录结构
 
 ```
 evaluation/
 ├── __init__.py
-├── evaluator.py
-├── metrics_calculator.py
-├── results_analyzer.py
-├── run_evaluation.py
-└── README.md
+├── config.yaml              # 评估模块独立配置文件
+├── metrics_calculator.py    # 指标计算器（使用pycocoevalcap）
+├── evaluator.py             # 简化的评估器
+├── run_evaluation.py        # 命令行入口
+└── README.md                # 本文件
 ```
 
-- `metrics_calculator.py`：封装 BLEU-4、ROUGE-L、CIDEr-D、SPICE 等指标计算。  
-- `evaluator.py`：`IGRAGEvaluator` 类，负责对整批图像生成描述并记录指标。  
-- `results_analyzer.py`：基于评估结果 JSON 生成报告、挖掘高低分样本。  
-- `run_evaluation.py`：命令行脚本，一键执行完整评估流程。  
-- `README.md`：当前说明文件。
+## 3. 配置文件
 
-## 3. 配置说明
+评估模块使用独立的配置文件 `evaluation/config.yaml`，与主项目配置分离。
 
-评估相关配置位于 `configs/config.yaml`：
+主要配置项：
 
 ```yaml
-evaluation:
+# COCO验证集路径
+data:
   val_images_dir: "/home/m025/qqw/coco/val2017/"
   val_annotations_path: "/home/m025/qqw/coco/annotations/captions_val2017.json"
-  subset_size: null              # 可设为整数快速验证
-  output_dir: "./evaluation_results/"
-  save_individual_results: true  # 是否保存逐图结果
 
+# 评估输出配置
+output:
+  output_dir: "./evaluation_results/"
+  output_file: null  # 如果为null则自动生成时间戳文件名
+
+# IGRAG模型配置
+igrag:
+  main_config_path: "configs/config.yaml"  # IGRAG主配置文件路径
+  retrieval_mode: "global_local"  # "global_only" 或 "global_local"
+
+# 评估指标配置
 metrics:
-  bleu: true
+  bleu_1: true
+  bleu_2: true
+  bleu_4: true
+  meteor: true
   rouge: true
   cider: true
   spice: true
 ```
 
-- **val_images_dir / val_annotations_path**：COCO 验证集路径，已在本地准备。  
-- **subset_size**：设置为整数可仅评估前 N 张图像，便于调试。  
-- **output_dir**：评估结果 JSON 与图表的保存路径。  
-- **save_individual_results**：评估过程中保留每张图像的中间结果，方便断点续跑。  
-- **metrics**：按需启停指标，若关闭某项指标请确保上层逻辑能正确处理 `None`。
-
 ## 4. 运行评估
 
-命令行示例：
+### 基本用法
 
 ```bash
-python evaluation/run_evaluation.py \
-  --config configs/config.yaml \
-  --mode global_local \
-  --subset 500 \
-  --output ./evaluation_results/coco_val_subset.json
+# 评估所有图片
+python evaluation/run_evaluation.py
+
+# 评估前100张图片（用于快速测试）
+python evaluation/run_evaluation.py --subset 100
+
+# 使用自定义配置文件
+python evaluation/run_evaluation.py --config evaluation/config.yaml --subset 50
 ```
 
-参数说明：
+### 命令行参数
 
-- `--config`：配置文件路径。  
-- `--mode`：检索模式；`global_only` 仅使用全局检索，`global_local` 同时启用局部分块检索。  
-- `--subset`：评估图像数量；缺省时遍历验证集全部图像。  
-- `--output`：结果文件路径；未指定时按时间戳自动生成。
+- `--config`: 评估模块配置文件路径（默认: `evaluation/config.yaml`）
+- `--subset`: 评估子集大小，只评估前N张图片（用于快速测试）
 
-脚本会输出：
+## 5. 评估结果
 
-1. JSON 结果文件，包含总体统计与逐图指标。  
-2. 终端文本报告（由 `ResultsAnalyzer` 生成），列出均值、分位数及高低分案例。  
-3. 若安装了 `matplotlib`，额外保存对应直方图图片。
+评估结果保存在 JSON 文件中，包含以下信息：
 
-## 5. 结果分析
-
-手动分析现有结果：
-
-```python
-from pathlib import Path
-from evaluation.results_analyzer import ResultsAnalyzer
-
-analyzer = ResultsAnalyzer()
-analyzer.load_results(Path("evaluation_results/coco_val_subset.json"))
-report = analyzer.generate_report(top_k=10)
-print(report)
+```json
+{
+  "generated_at": "2024-01-01T12:00:00Z",
+  "num_images": 100,
+  "aggregate_metrics": {
+    "BLEU-1": 0.7234,
+    "BLEU-2": 0.5678,
+    "BLEU-4": 0.3456,
+    "METEOR": 0.4567,
+    "ROUGE-L": 0.5123,
+    "CIDEr": 0.6789,
+    "SPICE": 0.2345
+  },
+  "results": [
+    {
+      "image_id": 12345,
+      "file_name": "COCO_val2017_000000012345.jpg",
+      "generated_caption": "IGRAG生成的caption",
+      "coco_captions": [
+        "COCO参考caption 1",
+        "COCO参考caption 2",
+        ...
+      ],
+      "metrics": {
+        "BLEU-1": 0.7500,
+        "BLEU-2": 0.6000,
+        "BLEU-4": 0.4000,
+        "METEOR": 0.5000,
+        "ROUGE-L": 0.5500,
+        "CIDEr": 0.7000,
+        "SPICE": 0.3000
+      }
+    },
+    ...
+  ]
+}
 ```
 
-可按需调高 `top_k`，查看更多高分与低分样本，用于误差分析。
+每个结果项包含：
+1. **IGRAG生成的caption** (`generated_caption`)
+2. **COCO参考caption** (`coco_captions`)
+3. **各项指标得分** (`metrics`)
 
-## 6. 常见问题
+## 6. 支持的评估指标
 
-- **依赖报错**：确认 `pycocotools`、`rouge-score` 已安装，Linux 环境需提前安装 `gcc`、`python3-dev` 等编译依赖。  
-- **SPICE 失败**：检查 Java 环境，必要时设置 `JAVA_HOME`。若仍报错，可在配置中将 `metrics.spice` 设为 `false`。  
-- **评估缓慢**：使用 `--subset` 或在配置中设置 `subset_size`；检查是否启用了 `global_local` 模式（分块检索更耗时）。  
-- **磁盘占用**：若不需要中间结果，将 `save_individual_results` 设为 `false`。
+本模块使用 `pycocoevalcap` 计算以下标准指标：
 
-## 7. 后续扩展
+- **BLEU-1, BLEU-2, BLEU-4**: n-gram 精确度指标
+- **METEOR**: 考虑同义词的评估指标
+- **ROUGE-L**: 基于最长公共子序列的指标
+- **CIDEr**: 共识导向的图像描述评估指标
+- **SPICE**: 基于语义命题的评估指标
 
-- 在 `MetricsCalculator` 中新增其它指标（如 METEOR、BERTScore）。  
-- 在 `ResultsAnalyzer` 中加入图像可视化、错误案例筛选等功能。  
-- 将评估脚本整合至 CI/CD 流程，实现自动化回归评估。
+所有指标均通过 `pycocoevalcap` 计算，确保与标准评估流程一致。
 
-如需进一步定制，可直接扩展相应模块或在 `evaluation/` 下新增辅助脚本。
+## 7. 常见问题
 
+- **依赖报错**: 确认 `pycocotools`、`pycocoevalcap` 已正确安装
+- **SPICE 失败**: 检查 Java 环境，必要时设置 `JAVA_HOME`
+- **评估缓慢**: 使用 `--subset` 参数进行快速测试
+- **配置文件路径**: 确保评估配置文件和IGRAG主配置文件路径正确
+
+## 8. 模块独立性
+
+评估模块与主项目保持相对独立：
+
+- 使用独立的配置文件 `evaluation/config.yaml`
+- 通过 `main.generate_caption()` 函数调用IGRAG生成caption，不直接依赖内部实现
+- 评估结果格式简单，易于解析和分析
