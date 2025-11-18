@@ -15,3 +15,8 @@ sentencepiece
 
 # Optional helpers
 accelerate
+
+# Description optimization dependencies
+sentence-transformers
+hdbscan
+scikit-learn

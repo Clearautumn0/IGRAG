@@ -89,6 +89,17 @@ class ImageRetriever:
         self.use_patch_retrieval = False
         self.patch_detector = None
         self.local_retriever = None
+        
+        # 初始化描述优化器（如果启用）
+        self.description_optimizer = None
+        opt_config = cfg.get("description_optimization", {})
+        if opt_config.get("enabled", False):
+            try:
+                from core.description_optimizer import DescriptionOptimizer
+                self.description_optimizer = DescriptionOptimizer(cfg)
+                logger.info("Description optimizer initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize description optimizer: {e}, continuing without optimization")
 
     def extract_features(self, image: Union[str, Image.Image]) -> 'np.ndarray':
         """Extract CLIP image features for a single image.
@@ -151,6 +162,7 @@ class ImageRetriever:
         """Get captions for retrieved images.
 
         Returns a list of dicts: {"image_id": id, "score": float, "captions": [..]}
+        如果启用了描述优化，返回优化后的代表性描述。
         """
         if top_k is None:
             # fall back to config default if available
@@ -161,6 +173,94 @@ class ImageRetriever:
         for image_id, score in hits:
             captions = self.image_id_to_captions.get(image_id, [])
             out.append({"image_id": image_id, "score": score, "captions": captions})
+        
+        # 如果启用了描述优化，对描述进行聚类优化
+        if self.description_optimizer and self.description_optimizer.enabled:
+            try:
+                # 收集所有描述和对应的图像相似度
+                all_descriptions = []
+                all_similarities = []
+                
+                for item in out:
+                    captions = item.get("captions", [])
+                    score = item.get("score", 0.0)
+                    # 将每个图像的多个描述都加入列表
+                    for caption in captions:
+                        if isinstance(caption, str) and caption.strip():
+                            all_descriptions.append(caption.strip())
+                            all_similarities.append(score)
+                
+                if len(all_descriptions) > 1:
+                    # 执行描述优化
+                    optimized_descriptions = self.description_optimizer.optimize_descriptions(
+                        all_descriptions, all_similarities
+                    )
+                    
+                    if optimized_descriptions:
+                        # 将优化后的描述转换回原始格式
+                        # 创建描述到优化元数据的映射
+                        desc_to_metadata = {
+                            opt_desc.get("description", ""): opt_desc
+                            for opt_desc in optimized_descriptions
+                        }
+                        
+                        # 构建优化后的输出，保持原有结构但使用优化后的描述
+                        optimized_out = []
+                        used_descriptions = set()
+                        
+                        # 按图像相似度排序原始结果
+                        sorted_out = sorted(out, key=lambda x: x.get("score", 0.0), reverse=True)
+                        
+                        for item in sorted_out:
+                            image_id = item.get("image_id")
+                            score = item.get("score", 0.0)
+                            
+                            # 尝试找到匹配的优化描述
+                            matching_desc = None
+                            for opt_desc in optimized_descriptions:
+                                desc_text = opt_desc.get("description", "")
+                                if desc_text not in used_descriptions:
+                                    # 使用第一个未使用的优化描述
+                                    matching_desc = desc_text
+                                    used_descriptions.add(desc_text)
+                                    break
+                            
+                            # 如果没有找到匹配的优化描述，使用原始描述的第一个
+                            if not matching_desc:
+                                original_captions = item.get("captions", [])
+                                if original_captions:
+                                    matching_desc = original_captions[0]
+                            
+                            if matching_desc:
+                                opt_metadata = desc_to_metadata.get(matching_desc, {})
+                                optimized_out.append({
+                                    "image_id": image_id,
+                                    "score": score,
+                                    "captions": [matching_desc],
+                                    "_optimized": True,
+                                    "_optimization_metadata": {
+                                        "cluster_score": opt_metadata.get("cluster_score", 0.0),
+                                        "image_similarity": opt_metadata.get("image_similarity", 0.0),
+                                        "brevity_score": opt_metadata.get("brevity_score", 0.0),
+                                        "combined_score": opt_metadata.get("combined_score", 0.0),
+                                        "cluster_size": opt_metadata.get("cluster_size", 1)
+                                    }
+                                })
+                        
+                        # 如果优化后没有结果，回退到原始结果
+                        if optimized_out:
+                            logger.info(f"Description optimization: {len(all_descriptions)} descriptions -> "
+                                      f"{len(optimized_descriptions)} representative descriptions")
+                            return optimized_out
+                        else:
+                            logger.warning("Description optimization produced no results, using original")
+                    else:
+                        logger.warning("Description optimization returned empty result, using original")
+                else:
+                    logger.debug("Not enough descriptions for optimization (need > 1)")
+            except Exception as e:
+                logger.warning(f"Description optimization failed: {e}, using original descriptions")
+        
         return out
 
     def enable_patch_retrieval(self):

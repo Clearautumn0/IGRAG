@@ -51,3 +51,17 @@ metrics:
   rouge: true
   cider: true
   spice: false
+
+description_optimization:
+  enabled: true
+  embedding_model: "../models/all-MiniLM-L6-v2/"
+  max_final_descriptions: 5
+  clustering_algorithm: "hdbscan"
+  min_cluster_size: 2
+  score_weights:
+    cluster_similarity: 0.4
+    image_similarity: 0.4
+    brevity: 0.2
+  hdbscan:
+    min_samples: 1
+    cluster_selection_epsilon: 0.1
