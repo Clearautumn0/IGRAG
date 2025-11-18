@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import yaml
 from pathlib import Path
 
 from evaluation.evaluator import SimpleEvaluator
-from main import setup_logging
+from main import setup_logging, load_config
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,6 +24,12 @@ def parse_args() -> argparse.Namespace:
   
   # 使用自定义评估配置文件
   python evaluation/run_evaluation.py --config evaluation/config.yaml --subset 50
+  
+  # 使用flan-t5模型进行评估
+  python evaluation/run_evaluation.py --model flan-t5 --subset 100
+  
+  # 使用qwen模型进行评估
+  python evaluation/run_evaluation.py --model qwen --subset 100
   
   # 评估所有图片
   python evaluation/run_evaluation.py
@@ -40,6 +47,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="评估子集大小（只评估前N张图片，用于快速测试）"
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        choices=["qwen", "flan-t5"],
+        help="模型类型（qwen 或 flan-t5）"
+    )
     return parser.parse_args()
 
 
@@ -53,9 +66,29 @@ def main() -> None:
         logging.error(f"评估配置文件不存在: {eval_config_path}")
         return
     
+    # 加载IGRAG主配置（如果需要根据--model参数修改）
+    igrag_config = None
+    if args.model:
+        # 从评估配置中获取主配置路径，或使用默认路径
+        with open(eval_config_path, "r", encoding="utf-8") as f:
+            eval_config = yaml.safe_load(f)
+        main_config_path = eval_config.get("igrag", {}).get("main_config_path", "configs/config.yaml")
+        igrag_config = load_config(main_config_path)
+        
+        # 根据--model参数设置模型路径和类型
+        model_config = igrag_config.setdefault("model_config", {})
+        if args.model == "flan-t5":
+            model_config["llm_model_path"] = "../models/flan-t5-base/"
+            model_config["model_type"] = "flan-t5"
+        elif args.model == "qwen":
+            model_config["llm_model_path"] = "../models/Qwen2.5-3B-instruct/"
+            model_config["model_type"] = "qwen"
+        
+        logging.info(f"使用模型: {args.model}, 模型路径: {model_config.get('llm_model_path')}")
+    
     # 初始化评估器
     try:
-        evaluator = SimpleEvaluator(eval_config_path)
+        evaluator = SimpleEvaluator(eval_config_path, igrag_config=igrag_config)
     except Exception as e:
         logging.error(f"初始化评估器失败: {e}")
         return

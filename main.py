@@ -351,6 +351,7 @@ def main():
     parser.add_argument("--mode", type=str, choices=["deploy", "test"], help="Override runtime mode (deploy/test)")
     parser.add_argument("--i", "--input", dest="input", type=str, help="Input image path (default: input/test_image.jpg)")
     parser.add_argument("--config", dest="config_path", type=str, help="Custom config file path")
+    parser.add_argument("--model", type=str, choices=["qwen", "flan-t5"], help="Model type to use (qwen or flan-t5)")
     args = parser.parse_args()
 
     try:
@@ -361,6 +362,16 @@ def main():
 
     if args.mode:
         base_config.setdefault("runtime_config", {})["mode"] = args.mode
+    
+    # 根据--model参数设置模型路径和类型
+    if args.model:
+        model_config = base_config.setdefault("model_config", {})
+        if args.model == "flan-t5":
+            model_config["llm_model_path"] = "../models/flan-t5-base/"
+            model_config["model_type"] = "flan-t5"
+        elif args.model == "qwen":
+            model_config["llm_model_path"] = "../models/Qwen2.5-3B-instruct/"
+            model_config["model_type"] = "qwen"
 
     setup_logging(base_config)
 

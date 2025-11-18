@@ -5,14 +5,14 @@ from typing import Dict, List, Optional, Union
 
 import torch
 import yaml
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2SeqLM
 
 
 logger = logging.getLogger(__name__)
 
 
 class CaptionGenerator:
-    """Generate a consolidated caption from retrieved captions using FLAN-T5.
+    """Generate a consolidated caption from retrieved captions using LLM (Qwen or FLAN-T5).
 
     Usage:
         gen = CaptionGenerator(config)
@@ -45,7 +45,7 @@ class CaptionGenerator:
     )
 
     def __init__(self, config: Union[dict, str]):
-        """Load Qwen causal model and tokenizer.
+        """Load LLM model (Qwen or FLAN-T5) and tokenizer.
 
         Args:
             config: dict or path to YAML config (same structure as configs/config.yaml)
@@ -89,17 +89,44 @@ class CaptionGenerator:
             "You are a helpful assistant that specializes in writing concise, comprehensive image captions.",
         )
 
+        # 检测模型类型：通过配置或路径判断
+        model_type = cfg.get("model_config", {}).get("model_type", "").lower()
+        if not model_type:
+            # 通过路径自动检测
+            llm_path_lower = llm_path.lower()
+            if "flan" in llm_path_lower or "t5" in llm_path_lower:
+                model_type = "flan-t5"
+            elif "qwen" in llm_path_lower:
+                model_type = "qwen"
+            else:
+                # 默认尝试作为Qwen加载
+                model_type = "qwen"
+        
+        self.model_type = model_type
+        logger.info(f"Detected model type: {model_type}, loading from {llm_path}")
+
         try:
+            # 加载tokenizer
             tokenizer_kwargs = dict(trust_remote_code=True, use_fast=False)
             self.tokenizer = AutoTokenizer.from_pretrained(llm_path, **tokenizer_kwargs)
             if getattr(self.tokenizer, "pad_token_id", None) is None:
                 pad_token = getattr(self.tokenizer, "eos_token", None)
                 if pad_token:
                     self.tokenizer.pad_token = pad_token
+                else:
+                    # 对于flan-t5，pad_token_id通常等于eos_token_id
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
+            
+            # 根据模型类型加载不同的模型类
             model_kwargs = {"trust_remote_code": True}
             if self.device.type == "cuda":
                 model_kwargs["torch_dtype"] = torch.float16
-            self.model = AutoModelForCausalLM.from_pretrained(llm_path, **model_kwargs)
+            
+            if model_type == "flan-t5":
+                self.model = AutoModelForSeq2SeqLM.from_pretrained(llm_path, **model_kwargs)
+            else:  # qwen or default
+                self.model = AutoModelForCausalLM.from_pretrained(llm_path, **model_kwargs)
+            
             self.model.to(self.device)
             self.model.eval()
         except Exception as e:
@@ -375,29 +402,40 @@ class CaptionGenerator:
             except Exception as e:
                 print(f"Failed to show tokenized prompt: {e}")
 
-        # primary generation attempt
-        def _build_chat_inputs(user_prompt: str):
-            messages = []
-            if self.system_prompt:
-                messages.append({"role": "system", "content": self.system_prompt})
-            messages.append({"role": "user", "content": user_prompt})
-            try:
-                chat_text = self.tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
+        # 根据模型类型构建输入
+        def _build_inputs(user_prompt: str):
+            if self.model_type == "flan-t5":
+                # flan-t5是seq2seq模型，直接编码prompt
+                tokenized = self.tokenizer(
+                    user_prompt,
+                    return_tensors="pt",
+                    truncation=True,
+                    padding=True,
+                    max_length=512,  # T5模型通常有输入长度限制
                 )
-            except AttributeError:
-                chat_text = user_prompt
-            tokenized = self.tokenizer(
-                chat_text,
-                return_tensors="pt",
-                truncation=True,
-                padding=True,
-            )
+            else:
+                # Qwen等causal模型使用chat template
+                messages = []
+                if self.system_prompt:
+                    messages.append({"role": "system", "content": self.system_prompt})
+                messages.append({"role": "user", "content": user_prompt})
+                try:
+                    chat_text = self.tokenizer.apply_chat_template(
+                        messages, tokenize=False, add_generation_prompt=True
+                    )
+                except AttributeError:
+                    chat_text = user_prompt
+                tokenized = self.tokenizer(
+                    chat_text,
+                    return_tensors="pt",
+                    truncation=True,
+                    padding=True,
+                )
             tokenized = {k: v.to(self.device) for k, v in tokenized.items()}
             return tokenized
 
         def _run_generation(user_prompt: str, override_kwargs: Optional[Dict] = None) -> str:
-            chat_inputs = _build_chat_inputs(user_prompt)
+            inputs = _build_inputs(user_prompt)
             pad_token_id = self.tokenizer.pad_token_id
             eos_token_id = self.tokenizer.eos_token_id
             if pad_token_id is None:
@@ -407,8 +445,14 @@ class CaptionGenerator:
             if eos_token_id is None:
                 eos_token_id = getattr(self.model.config, "eos_token_id", None)
 
-            prompt_len = chat_inputs["input_ids"].shape[1]
-            total_min_length = min(prompt_len + self.min_length, prompt_len + self.max_length)
+            input_len = inputs["input_ids"].shape[1]
+            
+            # 对于seq2seq模型（flan-t5），min_length是生成序列的最小长度，不包括输入
+            # 对于causal模型（qwen），min_length包括输入长度
+            if self.model_type == "flan-t5":
+                total_min_length = self.min_length
+            else:
+                total_min_length = min(input_len + self.min_length, input_len + self.max_length)
 
             gen_kwargs = dict(
                 max_new_tokens=self.max_length,
@@ -428,19 +472,30 @@ class CaptionGenerator:
                 overrides = dict(override_kwargs)
                 min_length_offset = overrides.pop("min_length_offset", None)
                 if min_length_offset is not None:
-                    gen_kwargs["min_length"] = min(
-                        prompt_len + min_length_offset, prompt_len + self.max_length
-                    )
+                    if self.model_type == "flan-t5":
+                        gen_kwargs["min_length"] = min_length_offset
+                    else:
+                        gen_kwargs["min_length"] = min(
+                            input_len + min_length_offset, input_len + self.max_length
+                        )
                 gen_kwargs.update(overrides)
+            
             with torch.no_grad():
                 output = self.model.generate(
-                    input_ids=chat_inputs["input_ids"],
-                    attention_mask=chat_inputs.get("attention_mask"),
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs.get("attention_mask"),
                     **gen_kwargs,
                 )
-            generated_sequence = output[0]
-            if generated_sequence.shape[0] > prompt_len:
-                generated_sequence = generated_sequence[prompt_len:]
+            
+            # 对于seq2seq模型，输出就是生成的序列
+            # 对于causal模型，需要去掉输入部分
+            if self.model_type == "flan-t5":
+                generated_sequence = output[0]
+            else:
+                generated_sequence = output[0]
+                if generated_sequence.shape[0] > input_len:
+                    generated_sequence = generated_sequence[input_len:]
+            
             return self.tokenizer.decode(generated_sequence, skip_special_tokens=True)
 
         decoded = _run_generation(prompt)
