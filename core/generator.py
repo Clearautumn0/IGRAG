@@ -38,7 +38,7 @@ class CaptionGenerator:
         "Similar images show:\n"
         "{global_descriptions}\n\n"
         
-        "Detected objects:\n"
+        "DETECTED OBJECTS AND POSITIONS:\n"
         "{local_descriptions}\n\n"
         
         "Caption:"
@@ -181,7 +181,7 @@ class CaptionGenerator:
         return prompt
     
     def _build_patch_prompt(self, retrieved_data: dict) -> str:
-        """构建包含全局和局部描述的分层提示词。
+        """构建包含全局描述和局部位置信息的分层提示词。
         
         Args:
             retrieved_data: {
@@ -191,7 +191,7 @@ class CaptionGenerator:
                         "bbox": [x1, y1, x2, y2],
                         "class_label": "类别名称",
                         "confidence": 置信度,
-                        "descriptions": [描述列表]
+                        "position": "相对位置字符串（如 'top left', 'center'）"
                     }
                 ]
             }
@@ -213,27 +213,26 @@ class CaptionGenerator:
         
         global_block = "\n".join([f"- {desc}" for desc in global_descriptions]) if global_descriptions else "None"
         
-        # 处理局部描述：按类别分组，结构化呈现以方便模型推断实例个数与复数
+        # 处理局部区域：按类别分组位置信息
         local_regions = retrieved_data.get("local_regions", [])
-        grouped = self.group_local_descriptions_by_class(local_regions)
-
-        local_sections = []
-        local_entrys = []
-        for class_label, descs in grouped.items():
-            if not descs:
-                continue
-            # 只输出类别及实例数量，例如 "bird:3"
-            # count = len(descs)
-            # count = sum(1 for region in local_regions if region['class_label'] == class_label)
-            # local_sections.append(f"{class_label}:{count}")
-
-            # 生成结构化分组块
-            section_lines = [f"OBJECT TYPE: {class_label}"]
-            for i, d in enumerate(descs, start=1):
-                section_lines.append(f"- Instance {i}: {d}")
-            local_sections.append("\n".join(section_lines))
-        # 使用单行换行连接每个类别:数量，示例："bird:3\ndog:2"
-        local_block = "\n".join(local_sections) if local_sections else "None"
+        # 按类别分组位置信息
+        grouped_positions = {}
+        for region in local_regions:
+            class_label = region.get("class_label", "unknown")
+            position = region.get("position", "unknown")
+            if class_label not in grouped_positions:
+                grouped_positions[class_label] = []
+            grouped_positions[class_label].append(position)
+        
+        # 生成位置信息格式：类别: 位置1, 位置2, ...
+        local_lines = []
+        for class_label, positions in grouped_positions.items():
+            if positions:
+                # 同一类别的多个位置用逗号分隔
+                positions_str = ", ".join(positions)
+                local_lines.append(f"{class_label}: {positions_str}")
+        
+        local_block = "\n".join(local_lines) if local_lines else "None"
         
         # 构建完整提示词
         prompt = self.PROMPT_TEMPLATE_PATCH.format(

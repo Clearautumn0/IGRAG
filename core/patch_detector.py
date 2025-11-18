@@ -193,3 +193,59 @@ class PatchDetector:
         
         return cropped_regions
 
+    def calculate_relative_position(self, bbox: List[int], image_size: Tuple[int, int]) -> str:
+        """计算边界框在图像中的相对位置。
+        
+        将图像划分为3×3网格，定义9个相对位置：
+        - 左上 | 上 | 右上
+        - 左   | 中 | 右  
+        - 左下 | 下 | 右下
+        
+        Args:
+            bbox: [x1, y1, x2, y2] 边界框坐标
+            image_size: (width, height) 图像尺寸
+            
+        Returns:
+            相对位置字符串，如 "top left", "center", "bottom right" 等
+        """
+        x1, y1, x2, y2 = bbox
+        image_width, image_height = image_size
+        
+        # 计算边界框中心点
+        x_center = (x1 + x2) / 2.0
+        y_center = (y1 + y2) / 2.0
+        
+        # 将图像划分为3×3网格
+        # 计算中心点所在的网格区域
+        x_ratio = x_center / image_width
+        y_ratio = y_center / image_height
+        
+        # 确定水平位置：左、中、右
+        if x_ratio < 1.0 / 3.0:
+            horizontal = "left"
+        elif x_ratio < 2.0 / 3.0:
+            horizontal = "center"
+        else:
+            horizontal = "right"
+        
+        # 确定垂直位置：上、中、下
+        if y_ratio < 1.0 / 3.0:
+            vertical = "top"
+        elif y_ratio < 2.0 / 3.0:
+            vertical = "center"
+        else:
+            vertical = "bottom"
+        
+        # 组合位置描述
+        if horizontal == "center" and vertical == "center":
+            return "center"
+        elif horizontal == "center":
+            # 只有垂直位置：上或下
+            return vertical
+        elif vertical == "center":
+            # 只有水平位置：左或右
+            return horizontal
+        else:
+            # 组合位置：左上、右上、左下、右下
+            return f"{vertical} {horizontal}"
+

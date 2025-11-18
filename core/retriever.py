@@ -296,7 +296,7 @@ class ImageRetriever:
                         "bbox": [x1, y1, x2, y2],
                         "class_label": "类别名称",
                         "confidence": 置信度,
-                        "descriptions": [描述列表]
+                        "position": "相对位置字符串（如 'top left', 'center'）"
                     }
                 ]
             }
@@ -328,17 +328,31 @@ class ImageRetriever:
                 # 裁剪区域
                 image_patches = self.patch_detector.crop_regions(img, filtered_detections)
                 
-                # 提取全局检索到的image_id集合，用于排除重复
+                # 获取图像尺寸
+                image_size = img.size  # (width, height)
+                
+                # 为每个检测结果计算位置信息并添加到detection_info中
+                image_patches_with_position = []
+                for patch_image, detection_info in image_patches:
+                    # 计算相对位置
+                    bbox = detection_info['bbox']
+                    position = self.patch_detector.calculate_relative_position(bbox, image_size)
+                    # 将位置信息添加到detection_info中
+                    detection_info_with_position = detection_info.copy()
+                    detection_info_with_position['position'] = position
+                    image_patches_with_position.append((patch_image, detection_info_with_position))
+                
+                # 提取全局检索到的image_id集合（已不再使用，保留以兼容接口）
                 global_image_ids = {item.get('image_id') for item in global_descriptions if item.get('image_id') is not None}
                 
-                # 对每个局部区域进行检索，排除全局检索到的image_id
+                # 对每个局部区域进行处理，获取位置信息
                 local_results = self.local_retriever.retrieve_local_descriptions(
-                    image_patches, 
+                    image_patches_with_position, 
                     exclude_image_ids=global_image_ids
                 )
                 local_regions = self.local_retriever.merge_local_descriptions(local_results)
                 
-                logger.info(f"Retrieved {len(local_regions)} local regions with descriptions")
+                logger.info(f"Processed {len(local_regions)} local regions with positions")
             else:
                 logger.warning("No objects detected, using global descriptions only")
         except Exception as e:

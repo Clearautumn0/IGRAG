@@ -167,15 +167,11 @@ def execute_pipeline(
                 if local_regions:
                     _emit("\nDetected local regions:")
                     for idx, region in enumerate(local_regions):
+                        position = region.get("position", "unknown")
                         _emit(
                             f"  Region {idx+1}: {region.get('class_label')} "
-                            f"(confidence: {region.get('confidence', 0):.3f})"
+                            f"(confidence: {region.get('confidence', 0):.3f}, position: {position})"
                         )
-                        descs = region.get("descriptions", [])
-                        if descs:
-                            _emit(f"    Retrieved descriptions: {len(descs)}")
-                            for desc in descs[:2]:
-                                _emit(f"      • {desc}")
 
             patch_config = cfg.get("patch_config", {})
             if patch_config.get("save_debug_patches", False):
