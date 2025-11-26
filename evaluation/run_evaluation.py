@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import warnings
 import yaml
 from pathlib import Path
 
@@ -84,7 +86,7 @@ def main() -> None:
             model_config["llm_model_path"] = "../models/Qwen2.5-3B-instruct/"
             model_config["model_type"] = "qwen"
         
-        logging.info(f"使用模型: {args.model}, 模型路径: {model_config.get('llm_model_path')}")
+        print(f"使用模型: {args.model}, 模型路径: {model_config.get('llm_model_path')}")
     
     # 初始化评估器
     try:
@@ -100,12 +102,12 @@ def main() -> None:
         logging.error("没有可评估的图片")
         return
     
-    # 显示评估信息
+    # 显示评估信息（使用print而不是logging，避免干扰tqdm）
     subset_size = args.subset
     if subset_size is not None:
-        logging.info(f"将评估前 {subset_size} 张图片（共 {len(image_ids)} 张）")
+        print(f"将评估前 {subset_size} 张图片（共 {len(image_ids)} 张）")
     else:
-        logging.info(f"将评估所有 {len(image_ids)} 张图片")
+        print(f"将评估所有 {len(image_ids)} 张图片")
     
     # 运行评估
     try:
@@ -130,9 +132,19 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # 设置基本日志
+    # 抑制所有警告，保证tqdm进度条连续
+    warnings.filterwarnings("ignore")
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    warnings.filterwarnings("ignore", message=".*module name.*")
+    warnings.filterwarnings("ignore", message=".*force_all_finite.*")
+    warnings.filterwarnings("ignore", message=".*ensure_all_finite.*")
+    
+    # 设置环境变量抑制transformers警告
+    os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+    
+    # 设置基本日志，评估时只显示ERROR级别，保证tqdm进度条连续
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.ERROR,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )

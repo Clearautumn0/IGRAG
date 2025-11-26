@@ -26,24 +26,41 @@ class CaptionGenerator:
         "Please describe the image in one sentence based on the overall description and the number of entities in the image (do not directly copy the description above).:\n"
     )
     
-    PROMPT_TEMPLATE_PATCH = (
-        "Generate a concise image caption in COCO dataset style.\n"
-        "Requirements:\n"
-        "- One sentence only\n" 
-        "- 8-12 words maximum\n"
-        "- Describe only what is visually apparent\n"
-        "- Use simple, factual language\n"
-        "- Avoid inferences or background information\n\n"
+    # PROMPT_TEMPLATE_PATCH = (
+    #     "Generate a concise image caption in COCO dataset style.\n"
+    #     "Requirements:\n"
+    #     "- One sentence only\n" 
+    #     "- 8-12 words maximum\n"
+    #     "- Describe only what is visually apparent\n"
+    #     "- Use simple, factual language\n"
+    #     "- Avoid inferences or background information\n\n"
         
-        "Similar images show:\n"
+    #     "Similar images show:\n"
+    #     "{global_descriptions}\n\n"
+        
+    #     "DETECTED OBJECTS AND POSITIONS:\n"
+    #     "{local_descriptions}\n\n"
+        
+    #     "Caption:"
+    # )
+    PROMPT_TEMPLATE_PATCH = (
+        "Generate a concise and accurate image caption in COCO style.\n\n"
+        
+        "CONTEXT FROM SIMILAR IMAGES:\n"
         "{global_descriptions}\n\n"
         
-        "DETECTED OBJECTS AND POSITIONS:\n"
+        "SPATIAL LAYOUT ANALYSIS:\n"
         "{local_descriptions}\n\n"
+        
+        "GUIDELINES:\n"
+        "- Integrate object positions with overall scene context\n"
+        "- Use plural forms when multiple instances are detected\n" 
+        "- Focus on visually salient elements and their relationships\n"
+        "- Keep description factual and concise (8-15 words)\n"
+        "- Ensure spatial coherence based on position information\n\n"
         
         "Caption:"
     )
-
     def __init__(self, config: Union[dict, str]):
         """Load LLM model (Qwen or FLAN-T5) and tokenizer.
 

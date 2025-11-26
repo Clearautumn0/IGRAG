@@ -4,14 +4,46 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
+import sys
+import warnings
 import yaml
 from collections import defaultdict
 from datetime import datetime
+from io import StringIO
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 from evaluation.metrics_calculator import MetricsCalculator
 from main import generate_caption, load_config
+
+
+class FilteredStderr:
+    """过滤特定警告消息的stderr包装器"""
+    
+    def __init__(self, original_stderr):
+        self.original_stderr = original_stderr
+        self.filter_patterns = [
+            "The module name",
+            "module name",
+            "not a valid Python identifier",
+            "force_all_finite",
+            "ensure_all_finite",
+            "FutureWarning",
+        ]
+    
+    def write(self, text):
+        # 检查是否包含需要过滤的模式
+        if any(pattern.lower() in text.lower() for pattern in self.filter_patterns):
+            return  # 过滤掉这些消息
+        self.original_stderr.write(text)
+    
+    def flush(self):
+        self.original_stderr.flush()
+    
+    def __getattr__(self, name):
+        return getattr(self.original_stderr, name)
 
 
 class SimpleEvaluator:
@@ -49,6 +81,12 @@ class SimpleEvaluator:
         elif retrieval_mode == "global_local":
             igrag_config.setdefault("retrieval_config", {})["use_patch_retrieval"] = True
         
+        # 评估时禁用patch保存功能
+        igrag_config.setdefault("patch_config", {})["save_debug_patches"] = False
+        
+        # 评估时设置日志级别为ERROR，减少输出
+        igrag_config.setdefault("log_config", {})["log_level"] = "ERROR"
+        
         self.igrag_config = igrag_config
         
         # 数据路径
@@ -85,6 +123,19 @@ class SimpleEvaluator:
         
         return references, image_id_to_file
 
+    def _clear_debug_patches(self) -> None:
+        """清理debug_patches目录"""
+        debug_dir = Path("output/debug_patches")
+        if debug_dir.exists():
+            try:
+                for item in debug_dir.iterdir():
+                    if item.is_file():
+                        item.unlink()
+                    elif item.is_dir():
+                        shutil.rmtree(item)
+            except Exception:
+                pass  # 忽略清理错误，不影响评估流程
+    
     def evaluate_single_image(
         self, 
         image_id: int
@@ -98,40 +149,74 @@ class SimpleEvaluator:
         Returns:
             包含生成caption、参考caption和指标得分的字典
         """
-        # 获取图片路径
-        file_name = self.image_id_to_file.get(image_id)
-        if not file_name:
-            logging.warning(f"图片ID {image_id} 不在标注文件中，跳过")
-            return None
+        # 临时设置日志级别为ERROR，减少输出
+        original_level = logging.getLogger().level
+        logging.getLogger().setLevel(logging.ERROR)
         
-        image_path = self.val_images_dir / file_name
-        if not image_path.exists():
-            logging.warning(f"图片文件不存在: {image_path}，跳过")
-            return None
+        # 抑制所有警告和特定stderr输出，保证tqdm进度条连续
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            # 抑制特定库的警告
+            warnings.filterwarnings("ignore", category=FutureWarning)
+            warnings.filterwarnings("ignore", message=".*module name.*")
+            warnings.filterwarnings("ignore", message=".*force_all_finite.*")
+            warnings.filterwarnings("ignore", message=".*ensure_all_finite.*")
+            
+            # 设置环境变量抑制transformers警告
+            original_transformers_verbosity = os.environ.get("TRANSFORMERS_VERBOSITY")
+            os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+            
+            # 使用过滤的stderr来抑制特定警告消息，但保留tqdm输出
+            original_stderr = sys.stderr
+            filtered_stderr = FilteredStderr(original_stderr)
+            sys.stderr = filtered_stderr
+            
+            try:
+                # 获取图片路径
+                file_name = self.image_id_to_file.get(image_id)
+                if not file_name:
+                    return None
+                
+                image_path = self.val_images_dir / file_name
+                if not image_path.exists():
+                    return None
+                
+                # 生成caption
+                try:
+                    result = generate_caption(
+                        str(image_path),
+                        self.igrag_config,
+                        emit_output=False,
+                        show_prompt=False,
+                        configure_logging=False
+                    )
+                    generated_caption = result.caption
+                except Exception as exc:
+                    generated_caption = ""
+                
+                # 清理debug_patches目录（每评估完一张图片就清理）
+                self._clear_debug_patches()
+                
+                # 获取参考caption
+                coco_captions = self.references.get(image_id, [])
+                
+                return {
+                    "image_id": image_id,
+                    "file_name": file_name,
+                    "generated_caption": generated_caption,
+                    "coco_captions": coco_captions,
+                }
+            finally:
+                # 恢复stderr
+                sys.stderr = original_stderr
+                # 恢复环境变量
+                if original_transformers_verbosity is not None:
+                    os.environ["TRANSFORMERS_VERBOSITY"] = original_transformers_verbosity
+                elif "TRANSFORMERS_VERBOSITY" in os.environ:
+                    del os.environ["TRANSFORMERS_VERBOSITY"]
         
-        # 生成caption
-        try:
-            result = generate_caption(
-                str(image_path),
-                self.igrag_config,
-                emit_output=False,
-                show_prompt=False,
-                configure_logging=False
-            )
-            generated_caption = result.caption
-        except Exception as exc:
-            logging.error(f"生成caption失败 (image_id={image_id}): {exc}")
-            generated_caption = ""
-        
-        # 获取参考caption
-        coco_captions = self.references.get(image_id, [])
-        
-        return {
-            "image_id": image_id,
-            "file_name": file_name,
-            "generated_caption": generated_caption,
-            "coco_captions": coco_captions,
-        }
+        # 恢复原始日志级别
+        logging.getLogger().setLevel(original_level)
 
     def evaluate_dataset(
         self, 
@@ -156,7 +241,28 @@ class SimpleEvaluator:
             logging.error("没有可评估的图片")
             return {}
         
-        logging.info(f"开始评估 {len(image_ids)} 张图片...")
+        # 设置日志级别为ERROR，减少输出，保证tqdm进度条连续
+        original_level = logging.getLogger().level
+        logging.getLogger().setLevel(logging.ERROR)
+        
+        # 抑制所有警告，保证tqdm进度条连续
+        warnings.filterwarnings("ignore")
+        warnings.filterwarnings("ignore", category=FutureWarning)
+        warnings.filterwarnings("ignore", message=".*module name.*")
+        warnings.filterwarnings("ignore", message=".*force_all_finite.*")
+        warnings.filterwarnings("ignore", message=".*ensure_all_finite.*")
+        
+        # 设置环境变量抑制transformers警告
+        original_transformers_verbosity = os.environ.get("TRANSFORMERS_VERBOSITY")
+        os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+        
+        # 使用过滤的stderr来抑制特定警告消息，但保留tqdm输出
+        original_stderr = sys.stderr
+        filtered_stderr = FilteredStderr(original_stderr)
+        sys.stderr = filtered_stderr
+        
+        # 清理debug_patches目录（评估开始时清理一次）
+        self._clear_debug_patches()
         
         # 评估每张图片
         results = []
@@ -164,27 +270,36 @@ class SimpleEvaluator:
         
         try:
             from tqdm import tqdm
-            iterator = tqdm(image_ids, desc="评估中", unit="张")
+            iterator = tqdm(image_ids, desc="评估中", unit="张", ncols=100)
         except ImportError:
             iterator = image_ids
         
-        for image_id in iterator:
-            result = self.evaluate_single_image(image_id)
-            if result is None:
-                continue
-            
-            results.append(result)
-            predictions.append({
-                "image_id": image_id,
-                "caption": result["generated_caption"]
-            })
+        try:
+            for image_id in iterator:
+                result = self.evaluate_single_image(image_id)
+                if result is None:
+                    continue
+                
+                results.append(result)
+                predictions.append({
+                    "image_id": image_id,
+                    "caption": result["generated_caption"]
+                })
+        finally:
+            # 恢复stderr
+            sys.stderr = original_stderr
+            # 恢复日志级别和警告设置
+            logging.getLogger().setLevel(original_level)
+            if original_transformers_verbosity is not None:
+                os.environ["TRANSFORMERS_VERBOSITY"] = original_transformers_verbosity
+            elif "TRANSFORMERS_VERBOSITY" in os.environ:
+                del os.environ["TRANSFORMERS_VERBOSITY"]
         
         if not predictions:
             logging.warning("没有有效的预测结果")
             return {}
         
         # 计算指标
-        logging.info("计算评估指标...")
         metrics_result = self.metrics_calculator.evaluate(predictions)
         
         # 合并指标到结果中
@@ -210,7 +325,7 @@ class SimpleEvaluator:
         output_path = self.output_dir / output_file
         self._save_results(output_path, final_result)
         
-        logging.info(f"评估完成，结果已保存到: {output_path}")
+        print(f"\n评估完成，结果已保存到: {output_path}")
         
         return final_result
 
