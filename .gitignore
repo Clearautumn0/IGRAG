@@ -11,3 +11,9 @@ utils/__pycache__/image_utils.cpython-310.pyc
 core/__pycache__/generator.cpython-310.pyc
 core/__pycache__/retriever.cpython-310.pyc
 
+lora_training/checkpoints/adapter_model.safetensors
+lora_training/checkpoints/
+
+
+
+lora_training/data/

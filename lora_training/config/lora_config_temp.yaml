@@ -1,0 +1,32 @@
+data:
+  max_source_length: 512
+  max_target_length: 64
+  train_path: lora_training/data/coco_lora_train_train.jsonl
+  val_path: lora_training/data/coco_lora_train_val.jsonl
+lora:
+  dropout: 0.1
+  lora_alpha: 32
+  r: 16
+  target_modules:
+  - q
+  - v
+model:
+  base_model_path: ../models/flan-t5-large
+  type: flan-t5
+training:
+  bf16: false
+  eval_batch_size: 4
+  evaluation_strategy: epoch
+  fp16: true
+  gradient_accumulation_steps: 8
+  learning_rate: 0.0001
+  logging_steps: 25
+  num_train_epochs: 3
+  output_dir: lora_training/checkpoints
+  report_to: []
+  save_strategy: epoch
+  save_total_limit: 3
+  seed: 42
+  train_batch_size: 4
+  warmup_steps: 150
+  weight_decay: 0.01

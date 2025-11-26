@@ -20,3 +20,6 @@ accelerate
 sentence-transformers
 hdbscan
 scikit-learn
+peft
+datasets
+evaluate

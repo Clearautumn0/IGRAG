@@ -1,6 +1,6 @@
 model_config:
   clip_model_path: "../models/clip-vit-base-patch32/"
-  llm_model_path: "../models/Qwen2.5-3B-instruct/"
+  llm_model_path: "../models/flan-t5-base/"
   detection_model_path: "../models/DETR/"
 
 data_config:
@@ -38,6 +38,11 @@ patch_config:
 
   # 调试选项
   save_debug_patches: true  # 是否保存检测到的区域图像用于调试
+
+lora_config:
+  enabled: true
+  weights_path: "lora_training/checkpoints"  # LoRA 适配器路径
+  merge_and_unload: false
 
 evaluation:
   val_images_dir: "/home/m025/qqw/coco/val2017/"

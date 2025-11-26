@@ -1,11 +1,17 @@
 import os
 import logging
 import re
+from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 import torch
 import yaml
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2SeqLM
+
+try:
+    from peft import PeftModel
+except ImportError:  # pragma: no cover - optional dependency
+    PeftModel = None
 
 
 logger = logging.getLogger(__name__)
@@ -122,6 +128,11 @@ class CaptionGenerator:
         self.model_type = model_type
         logger.info(f"Detected model type: {model_type}, loading from {llm_path}")
 
+        lora_config = cfg.get("lora_config", {})
+        self.use_lora = bool(lora_config.get("enabled", False))
+        self.lora_weights_path = lora_config.get("weights_path")
+        self.merge_lora_weights = bool(lora_config.get("merge_and_unload", False))
+
         try:
             # 加载tokenizer
             tokenizer_kwargs = dict(trust_remote_code=True, use_fast=False)
@@ -146,6 +157,57 @@ class CaptionGenerator:
             
             self.model.to(self.device)
             self.model.eval()
+
+            # LoRA 加载逻辑
+            if self.use_lora:
+                if not self.lora_weights_path:
+                    msg = "⚠️  LoRA enabled but weights_path is null/empty. LoRA will NOT be loaded."
+                    logger.warning(msg)
+                    print(msg)  # 确保用户能看到
+                    self.use_lora = False
+                elif PeftModel is None:
+                    msg = "⚠️  peft library not installed. Cannot load LoRA adapter. Install with: pip install peft"
+                    logger.warning(msg)
+                    print(msg)  # 确保用户能看到
+                    self.use_lora = False
+                else:
+                    # 检查路径是否存在
+                    weights_path_obj = Path(self.lora_weights_path)
+                    if not weights_path_obj.exists():
+                        msg = f"⚠️  LoRA weights path does not exist: {self.lora_weights_path}. LoRA will NOT be loaded."
+                        logger.warning(msg)
+                        print(msg)  # 确保用户能看到
+                        self.use_lora = False
+                    else:
+                        try:
+                            msg = f"🔄 Loading LoRA adapter from {self.lora_weights_path}"
+                            logger.info(msg)
+                            print(msg)  # 确保用户能看到
+                            self.model = PeftModel.from_pretrained(
+                                self.model,
+                                self.lora_weights_path,
+                                is_trainable=False,
+                            )
+                            self.model.to(self.device)
+                            if self.merge_lora_weights and hasattr(self.model, "merge_and_unload"):
+                                self.model = self.model.merge_and_unload()
+                                self.use_lora = False  # merged into base model
+                                msg = "✅ Merged LoRA adapter into base model weights."
+                                logger.info(msg)
+                                print(msg)
+                            else:
+                                msg = "✅ LoRA adapter loaded successfully."
+                                logger.info(msg)
+                                print(msg)
+                        except Exception as lora_err:
+                            msg = f"❌ Failed to load LoRA adapter: {lora_err}"
+                            logger.error(msg)
+                            print(msg)  # 确保用户能看到
+                            self.use_lora = False
+            else:
+                # LoRA 未启用时的提示（仅在 verbose 模式下）
+                if logger.level <= logging.DEBUG:
+                    logger.debug("LoRA is disabled in config.")
         except Exception as e:
             logger.error(f"Failed to load LLM from {llm_path}: {e}")
             raise
