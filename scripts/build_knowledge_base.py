@@ -4,6 +4,7 @@
 Outputs:
   - coco_knowledge_base.faiss
   - image_id_to_captions.pkl
+  - image_id_to_objects.pkl (new: object labels for object-aware retrieval)
 
 This script reads settings from `configs/config.yaml`.
 """
@@ -115,6 +116,93 @@ def save_pickle(obj, path):
         pickle.dump(obj, f)
 
 
+def load_coco_object_annotations(instances_annotations_path):
+    """加载并解析COCO instances标注文件，提取图像ID到物体类别的映射。
+    
+    Args:
+        instances_annotations_path: instances_train2017.json文件路径
+        
+    Returns:
+        tuple: (image_id_to_category_ids, category_id_to_name)
+            - image_id_to_category_ids: dict, {image_id: set(category_id, ...)}
+            - category_id_to_name: dict, {category_id: category_name}
+    """
+    logging.info(f"Loading COCO instances annotations from {instances_annotations_path}")
+    
+    if not os.path.exists(instances_annotations_path):
+        logging.warning(f"Instances annotations file not found: {instances_annotations_path}")
+        return {}, {}
+    
+    try:
+        with open(instances_annotations_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to load instances annotations: {e}")
+        return {}, {}
+    
+    # 构建category_id -> category_name映射
+    category_id_to_name = {}
+    for cat in data.get("categories", []):
+        cat_id = cat.get("id")
+        cat_name = cat.get("name", "").strip()
+        if cat_id is not None and cat_name:
+            category_id_to_name[cat_id] = cat_name
+    
+    logging.info(f"Loaded {len(category_id_to_name)} categories")
+    
+    # 构建image_id -> set(category_id)映射
+    image_id_to_category_ids = {}
+    for ann in data.get("annotations", []):
+        img_id = ann.get("image_id")
+        cat_id = ann.get("category_id")
+        
+        if img_id is not None and cat_id is not None:
+            if img_id not in image_id_to_category_ids:
+                image_id_to_category_ids[img_id] = set()
+            image_id_to_category_ids[img_id].add(cat_id)
+    
+    logging.info(f"Found object annotations for {len(image_id_to_category_ids)} images")
+    
+    return image_id_to_category_ids, category_id_to_name
+
+
+def integrate_object_tags(image_ids, coco_objects_dict, category_id_to_name):
+    """将COCO物体标注与当前处理的图像ID列表对齐，转换为物体名称列表。
+    
+    Args:
+        image_ids: 当前知识库中实际存在的图像ID列表
+        coco_objects_dict: image_id -> set(category_id)的映射
+        category_id_to_name: category_id -> category_name的映射
+        
+    Returns:
+        dict: {image_id: [object_name1, object_name2, ...]}，物体名称已去重并排序
+    """
+    image_id_to_objects = {}
+    
+    for img_id in image_ids:
+        category_ids = coco_objects_dict.get(img_id, set())
+        # 将category_id转换为category_name
+        object_names = []
+        for cat_id in category_ids:
+            cat_name = category_id_to_name.get(cat_id)
+            if cat_name:
+                object_names.append(cat_name)
+        
+        # 去重并排序（保证一致性）
+        image_id_to_objects[img_id] = sorted(list(set(object_names)))
+    
+    # 统计信息
+    images_with_objects = sum(1 for objs in image_id_to_objects.values() if objs)
+    total_objects = sum(len(objs) for objs in image_id_to_objects.values())
+    
+    logging.info(
+        f"Integrated object tags: {images_with_objects}/{len(image_ids)} images have objects, "
+        f"total {total_objects} object instances"
+    )
+    
+    return image_id_to_objects
+
+
 def main():
     cfg = load_config()
     setup_logging(cfg.get("log_config", {}).get("log_level", "ERROR"))
@@ -123,9 +211,11 @@ def main():
     llm_model_path = cfg.get("model_config", {}).get("llm_model_path")
     images_dir = cfg.get("data_config", {}).get("coco_images_dir")
     annotations_path = cfg.get("data_config", {}).get("coco_annotations_path")
+    instances_annotations_path = cfg.get("data_config", {}).get("coco_instances_annotations_path", "")
     top_k = cfg.get("retrieval_config", {}).get("top_k", 3)
     kb_path = cfg.get("knowledge_base_config", {}).get("knowledge_base_path")
     map_path = cfg.get("knowledge_base_config", {}).get("image_id_to_captions_path")
+    objects_path = cfg.get("knowledge_base_config", {}).get("image_id_to_objects_path", "")
 
     if not all([clip_model_path, images_dir, annotations_path, kb_path, map_path]):
         logging.error("Missing configuration values. Please check configs/config.yaml")
@@ -182,6 +272,27 @@ def main():
     except Exception as e:
         logging.error(f"Failed to save mapping to {map_path}: {e}")
         raise
+
+    # Extract and save object tags if instances annotations are available
+    if instances_annotations_path and objects_path:
+        try:
+            logging.info("Extracting object tags from COCO instances annotations...")
+            coco_objects_dict, category_id_to_name = load_coco_object_annotations(instances_annotations_path)
+            
+            if coco_objects_dict and category_id_to_name:
+                image_id_to_objects = integrate_object_tags(img_ids, coco_objects_dict, category_id_to_name)
+                
+                # Save object tags mapping
+                os.makedirs(os.path.dirname(objects_path) or ".", exist_ok=True)
+                save_pickle(image_id_to_objects, objects_path)
+                logging.info(f"Saved object tags mapping to {objects_path}")
+                logging.info(f"Object tags extracted for {len(image_id_to_objects)} images")
+            else:
+                logging.warning("No object annotations found or loaded, skipping object tags extraction")
+        except Exception as e:
+            logging.warning(f"Failed to extract object tags: {e}. Continuing without object tags.")
+    else:
+        logging.info("Object tags extraction skipped (instances_annotations_path or objects_path not configured)")
 
     print("Knowledge base build complete.")
 

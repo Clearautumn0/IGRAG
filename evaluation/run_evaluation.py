@@ -27,13 +27,19 @@ def parse_args() -> argparse.Namespace:
   # 使用自定义评估配置文件
   python evaluation/run_evaluation.py --config evaluation/config.yaml --subset 50
   
-  # 使用flan-t5模型进行评估
-  python evaluation/run_evaluation.py --model flan-t5 --subset 100
+  # 使用flan-t5-large模型进行评估
+  python evaluation/run_evaluation.py --model flan-t5-large --subset 100
+  
+  # 使用flan-t5-base模型进行评估
+  python evaluation/run_evaluation.py --model flan-t5-base --subset 100
+  
+  # 使用自定义模型路径
+  python evaluation/run_evaluation.py --model-path ../models/flan-t5-large/ --subset 100
   
   # 使用qwen模型进行评估
   python evaluation/run_evaluation.py --model qwen --subset 100
   
-  # 评估所有图片
+  # 评估所有图片（使用configs/config.yaml中的模型配置）
   python evaluation/run_evaluation.py
         """
     )
@@ -52,8 +58,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         type=str,
-        choices=["qwen", "flan-t5"],
-        help="模型类型（qwen 或 flan-t5）"
+        choices=["qwen", "flan-t5", "flan-t5-base", "flan-t5-large"],
+        help="模型类型（qwen、flan-t5、flan-t5-base 或 flan-t5-large）"
+    )
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default=None,
+        help="直接指定模型路径（会覆盖--model参数）"
     )
     return parser.parse_args()
 
@@ -77,16 +89,30 @@ def main() -> None:
         main_config_path = eval_config.get("igrag", {}).get("main_config_path", "configs/config.yaml")
         igrag_config = load_config(main_config_path)
         
-        # 根据--model参数设置模型路径和类型
+        # 根据--model参数或--model-path设置模型路径和类型
         model_config = igrag_config.setdefault("model_config", {})
-        if args.model == "flan-t5":
-            model_config["llm_model_path"] = "../models/flan-t5-base/"
-            model_config["model_type"] = "flan-t5"
-        elif args.model == "qwen":
-            model_config["llm_model_path"] = "../models/Qwen2.5-3B-instruct/"
-            model_config["model_type"] = "qwen"
         
-        print(f"使用模型: {args.model}, 模型路径: {model_config.get('llm_model_path')}")
+        if args.model_path:
+            # 如果指定了--model-path，直接使用该路径
+            model_config["llm_model_path"] = args.model_path
+            # 根据路径推断模型类型
+            if "flan" in args.model_path.lower() or "t5" in args.model_path.lower():
+                model_config["model_type"] = "flan-t5"
+            elif "qwen" in args.model_path.lower():
+                model_config["model_type"] = "qwen"
+            print(f"使用模型路径: {args.model_path}")
+        elif args.model:
+            # 根据--model参数设置模型路径
+            if args.model == "flan-t5" or args.model == "flan-t5-large":
+                model_config["llm_model_path"] = "../models/flan-t5-large/"
+                model_config["model_type"] = "flan-t5"
+            elif args.model == "flan-t5-base":
+                model_config["llm_model_path"] = "../models/flan-t5-base/"
+                model_config["model_type"] = "flan-t5"
+            elif args.model == "qwen":
+                model_config["llm_model_path"] = "../models/Qwen2.5-3B-instruct/"
+                model_config["model_type"] = "qwen"
+            print(f"使用模型: {args.model}, 模型路径: {model_config.get('llm_model_path')}")
     
     # 初始化评估器
     try:

@@ -44,7 +44,33 @@ def setup_logging(cfg: dict):
 
 
 def init_components(cfg: dict):
-    retriever = ImageRetriever(cfg)
+    """初始化检索器和生成器组件。
+    
+    根据配置决定使用基础检索器还是物体感知混合检索器。
+    """
+    # 检查是否启用物体感知混合检索
+    hybrid_config = cfg.get("hybrid_retrieval", {})
+    use_hybrid = hybrid_config.get("enabled", False)
+    
+    if use_hybrid:
+        # 使用物体感知混合检索器
+        from core.object_aware_retriever import ObjectAwareHybridRetriever
+        from core.patch_detector import PatchDetector
+        
+        # 初始化基础检索器
+        base_retriever = ImageRetriever(cfg)
+        
+        # 初始化检测器
+        detector = PatchDetector(cfg)
+        
+        # 创建混合检索器
+        retriever = ObjectAwareHybridRetriever(base_retriever, detector, cfg)
+        logging.info("Using ObjectAwareHybridRetriever")
+    else:
+        # 使用基础检索器
+        retriever = ImageRetriever(cfg)
+        logging.info("Using ImageRetriever")
+    
     generator = CaptionGenerator(cfg)
     return retriever, generator
 

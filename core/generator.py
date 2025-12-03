@@ -13,6 +13,13 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     PeftModel = None
 
+try:
+    from prompt_tuning.prompt_tuner import PromptTuner
+    _has_prompt_tuning = True
+except ImportError:  # pragma: no cover - optional dependency
+    PromptTuner = None
+    _has_prompt_tuning = False
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,37 +33,14 @@ class CaptionGenerator:
         caption = gen.generate_caption(prompt)
     """
     PROMPT_TEMPLATE_EN = (
-        "Based on the following similar image descriptions, generate ONE concise and comprehensive caption for the query image. "
-        "Do not copy the input sentences verbatim; synthesize and paraphrase.\n\n"
-        "Similar image descriptions:\n{descriptions}\n\n"
-        "Please describe the image in one sentence based on the overall description and the number of entities in the image (do not directly copy the description above).:\n"
+        "Given these similar image captions:"
+        "\n{descriptions}\n\n"
+        " Generate a new Caption:"
     )
     
-    # PROMPT_TEMPLATE_PATCH = (
-    #     "Generate a concise image caption in COCO dataset style.\n"
-    #     "Requirements:\n"
-    #     "- One sentence only\n" 
-    #     "- 8-12 words maximum\n"
-    #     "- Describe only what is visually apparent\n"
-    #     "- Use simple, factual language\n"
-    #     "- Avoid inferences or background information\n\n"
-        
-    #     "Similar images show:\n"
-    #     "{global_descriptions}\n\n"
-        
-    #     "DETECTED OBJECTS AND POSITIONS:\n"
-    #     "{local_descriptions}\n\n"
-        
-    #     "Caption:"
-    # )
+
     PROMPT_TEMPLATE_PATCH = (
         "Generate a concise and accurate image caption in COCO style.\n\n"
-        
-        "CONTEXT FROM SIMILAR IMAGES:\n"
-        "{global_descriptions}\n\n"
-        
-        "SPATIAL LAYOUT ANALYSIS:\n"
-        "{local_descriptions}\n\n"
         
         "GUIDELINES:\n"
         "- Integrate object positions with overall scene context\n"
@@ -64,7 +48,16 @@ class CaptionGenerator:
         "- Focus on visually salient elements and their relationships\n"
         "- Keep description factual and concise (8-15 words)\n"
         "- Ensure spatial coherence based on position information\n\n"
+
+
+        "SPATIAL LAYOUT ANALYSIS:\n"
+        "{local_descriptions}\n\n"
+
+
+        "CONTEXT FROM SIMILAR IMAGES:\n"
+        "{global_descriptions}\n\n"
         
+
         "Caption:"
     )
     def __init__(self, config: Union[dict, str]):
@@ -132,6 +125,12 @@ class CaptionGenerator:
         self.use_lora = bool(lora_config.get("enabled", False))
         self.lora_weights_path = lora_config.get("weights_path")
         self.merge_lora_weights = bool(lora_config.get("merge_and_unload", False))
+        
+        # Prompt Tuning 配置
+        prompt_tuning_config = cfg.get("prompt_tuning", {})
+        self.use_prompt_tuning = bool(prompt_tuning_config.get("enabled", False))
+        self.prompt_tuning_weights_path = prompt_tuning_config.get("weights_path")
+        self.prompt_tuner = None
 
         try:
             # 加载tokenizer
@@ -208,6 +207,59 @@ class CaptionGenerator:
                 # LoRA 未启用时的提示（仅在 verbose 模式下）
                 if logger.level <= logging.DEBUG:
                     logger.debug("LoRA is disabled in config.")
+            
+            # Prompt Tuning 加载逻辑
+            if self.use_prompt_tuning:
+                if not _has_prompt_tuning:
+                    msg = "⚠️  Prompt Tuning enabled but prompt_tuning module not found. Install required dependencies."
+                    logger.warning(msg)
+                    print(msg)
+                    self.use_prompt_tuning = False
+                elif not self.prompt_tuning_weights_path:
+                    msg = "⚠️  Prompt Tuning enabled but weights_path is null/empty. Prompt Tuning will NOT be loaded."
+                    logger.warning(msg)
+                    print(msg)
+                    self.use_prompt_tuning = False
+                else:
+                    weights_path_obj = Path(self.prompt_tuning_weights_path)
+                    if not weights_path_obj.exists():
+                        msg = f"⚠️  Prompt Tuning weights path does not exist: {self.prompt_tuning_weights_path}. Prompt Tuning will NOT be loaded."
+                        logger.warning(msg)
+                        print(msg)
+                        self.use_prompt_tuning = False
+                    else:
+                        try:
+                            prompt_length = prompt_tuning_config.get("prompt_length", 20)
+                            initialization = prompt_tuning_config.get("initialization", "random")
+                            
+                            msg = f"🔄 Loading Prompt Tuning from {self.prompt_tuning_weights_path}"
+                            logger.info(msg)
+                            print(msg)
+                            
+                            # 创建PromptTuner
+                            self.prompt_tuner = PromptTuner(
+                                model=self.model,
+                                tokenizer=self.tokenizer,
+                                prompt_length=prompt_length,
+                                initialization=initialization,
+                                device=self.device,
+                            )
+                            
+                            # 加载训练好的embeddings
+                            self.prompt_tuner.load_prompt_embeddings(self.prompt_tuning_weights_path)
+                            
+                            msg = "✅ Prompt Tuning loaded successfully."
+                            logger.info(msg)
+                            print(msg)
+                        except Exception as prompt_err:
+                            msg = f"❌ Failed to load Prompt Tuning: {prompt_err}"
+                            logger.error(msg)
+                            print(msg)
+                            self.use_prompt_tuning = False
+            else:
+                # Prompt Tuning 未启用时的提示（仅在 verbose 模式下）
+                if logger.level <= logging.DEBUG:
+                    logger.debug("Prompt Tuning is disabled in config.")
         except Exception as e:
             logger.error(f"Failed to load LLM from {llm_path}: {e}")
             raise
@@ -559,11 +611,20 @@ class CaptionGenerator:
                 gen_kwargs.update(overrides)
             
             with torch.no_grad():
-                output = self.model.generate(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=inputs.get("attention_mask"),
-                    **gen_kwargs,
-                )
+                # 如果启用了Prompt Tuning，使用PromptTuner的generate方法
+                if self.use_prompt_tuning and self.prompt_tuner is not None:
+                    output = self.prompt_tuner.generate(
+                        input_ids=inputs["input_ids"],
+                        attention_mask=inputs.get("attention_mask"),
+                        **gen_kwargs,
+                    )
+                else:
+                    # 使用标准生成方法
+                    output = self.model.generate(
+                        input_ids=inputs["input_ids"],
+                        attention_mask=inputs.get("attention_mask"),
+                        **gen_kwargs,
+                    )
             
             # 对于seq2seq模型，输出就是生成的序列
             # 对于causal模型，需要去掉输入部分

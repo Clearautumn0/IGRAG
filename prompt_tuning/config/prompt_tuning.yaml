@@ -1,0 +1,44 @@
+# Prompt Tuning 配置文件
+
+# 模型配置
+model:
+  base_model_path: "/home/m025/qqw/models/flan-t5-base"  # 基础模型路径
+  model_type: "seq2seq"  # "seq2seq" 或 "causal"
+
+# Prompt Tuning 配置
+prompt_tuning:
+  enabled: true
+  prompt_length: 20  # Prompt tokens数量
+  initialization: "random"  # "random" 或 "text"
+  weights_path: "prompt_tuning/checkpoints/prompt_embeddings.pt"  # 保存路径
+
+# 数据配置
+data:
+  train_data_path: "lora_training/data/coco_lora_train_train.jsonl"
+  val_data_path: "lora_training/data/coco_lora_train_val.jsonl"
+  max_source_length: 512
+  max_target_length: 64
+
+# 训练配置
+training:
+  output_dir: "prompt_tuning/checkpoints"
+  num_train_epochs: 3
+  per_device_train_batch_size: 4  # 减小批次大小以避免内存问题
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 16  # 增加梯度累积以保持有效批次大小
+  learning_rate: 0.03  # Prompt Tuning通常使用较大的学习率
+  weight_decay: 0.01
+  warmup_steps: 100
+  logging_steps: 10
+  eval_strategy: "epoch"  # 或 "steps"
+  eval_steps: 100  # 如果eval_strategy是"steps"
+  save_strategy: "epoch"
+  save_steps: 100
+  load_best_model_at_end: true
+  metric_for_best_model: "bleu"
+  greater_is_better: true
+  save_total_limit: 3
+  seed: 42
+  fp16: false  # 暂时禁用fp16以避免混合精度问题
+  dataloader_num_workers: 4
+

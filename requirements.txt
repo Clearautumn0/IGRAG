@@ -23,3 +23,5 @@ scikit-learn
 peft
 datasets
 evaluate
+mmdet
+mmcv
