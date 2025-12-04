@@ -1,6 +1,7 @@
 model_config:
   clip_model_path: "../models/clip-vit-base-patch32/"
   llm_model_path: "../models/flan-t5-base/"
+  model_type: "flan-t5"  # 明确指定使用flan-t5模型
   detection_model_path: "../models/DETR/"
 
 data_config:
@@ -10,29 +11,7 @@ data_config:
 
 retrieval_config:
   top_k: 5
-
   use_patch_retrieval: true  # 启用分块检索功能
-  use_object_aware_retrieval: true  # 启用物体感知混合检索功能
-  use_dense_retrieval: false  # 启用密集描述混合检索功能（如果为true，将使用DenseDescriptorHybridRetriever）
-
-# 物体感知混合检索配置
-hybrid_retrieval:
-  enabled: false  # 是否启用物体感知混合检索（如果为true，将使用ObjectAwareHybridRetriever）
-  object_weight: 1  # 物体匹配度在混合分数中的权重（范围0.0-1.0，0.0表示只使用CLIP分数，1.0表示只使用物体匹配度）
-  initial_recall_k: 100  # 第一阶段CLIP检索的召回数量（扩大召回池以便重排序）
-  dense_object_weight: 0.7  # 密集描述匹配度在混合分数中的权重（用于DenseDescriptorHybridRetriever，范围0.0-1.0）
-
-# 密集描述配置
-dense_descriptor:
-  model_type: "blip2"  # 模型类型: blip2
-  model_path: "../models/blip2-opt-2.7b/"  # 密集描述生成模型路径
-  prompt: "Generate a detailed list of phrases describing various elements in this image. Including objects, characters and any entity. Format your response as a list of key points, with each item being a very short phrase. Don't write complete sentences. Answer:"  # 提示词（用于引导生成短语列表）
-  knowledge_base_path: "./output/image_id_to_dense_captions.pkl"  # 密集描述知识库路径
-  embedding_model_path: "../models/all-MiniLM-L6-v2/"  # 句子嵌入模型路径（用于计算描述相似度）
-  batch_size: 8  # 批处理大小（用于进度显示，实际为逐张处理）
-  max_new_tokens: 100  # 最大生成token数
-  num_beams: 5  # beam search数量
-  checkpoint_interval: 100  # 检查点保存间隔（处理的图像数量）
 
 generation_config:
   max_length: 20
@@ -46,7 +25,6 @@ runtime_config:
 knowledge_base_config:
   knowledge_base_path: "./output/coco_knowledge_base.faiss"
   image_id_to_captions_path: "./output/image_id_to_captions.pkl"
-  image_id_to_objects_path: "./output/image_id_to_objects.pkl"  # 图像ID到物体类别列表的映射（用于物体感知检索）
 
 log_config:
   log_level: "ERROR"

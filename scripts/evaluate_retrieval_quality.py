@@ -690,29 +690,10 @@ def main():
     else:
         logging.warning("无法加载训练集标注，视觉一致性计算可能失败")
     
-    # 初始化检索器（根据配置选择基础检索器或混合检索器）
+    # 初始化检索器（仅使用基础检索器，不再支持混合检索或重排序）
     logging.info("初始化检索器...")
-    hybrid_config = config.get("hybrid_retrieval", {})
-    use_hybrid = hybrid_config.get("enabled", False)
-    
-    if use_hybrid:
-        # 使用物体感知混合检索器
-        from core.object_aware_retriever import ObjectAwareHybridRetriever
-        from core.patch_detector import PatchDetector
-        
-        logging.info("使用物体感知混合检索器 (ObjectAwareHybridRetriever)")
-        base_retriever = ImageRetriever(config)
-        detector = PatchDetector(config)
-        retriever = ObjectAwareHybridRetriever(base_retriever, detector, config)
-        
-        # 记录混合检索参数
-        object_weight = hybrid_config.get("object_weight", 0.5)
-        initial_recall_k = hybrid_config.get("initial_recall_k", 20)
-        logging.info(f"混合检索参数: object_weight={object_weight}, initial_recall_k={initial_recall_k}")
-    else:
-        # 使用基础检索器
-        logging.info("使用基础检索器 (ImageRetriever)")
-        retriever = ImageRetriever(config)
+    logging.info("使用基础检索器 (ImageRetriever)")
+    retriever = ImageRetriever(config)
     
     # 加载CLIP模型用于文本相似度计算
     logging.info("加载CLIP模型...")

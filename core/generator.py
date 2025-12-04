@@ -105,7 +105,7 @@ class CaptionGenerator:
             "You are a helpful assistant that specializes in writing concise, comprehensive image captions.",
         )
 
-        # 检测模型类型：通过配置或路径判断
+        # 检测模型类型：通过配置或路径判断，默认使用flan-t5
         model_type = cfg.get("model_config", {}).get("model_type", "").lower()
         if not model_type:
             # 通过路径自动检测
@@ -115,8 +115,8 @@ class CaptionGenerator:
             elif "qwen" in llm_path_lower:
                 model_type = "qwen"
             else:
-                # 默认尝试作为Qwen加载
-                model_type = "qwen"
+                # 默认使用flan-t5
+                model_type = "flan-t5"
         
         self.model_type = model_type
         logger.info(f"Detected model type: {model_type}, loading from {llm_path}")
